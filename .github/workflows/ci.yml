@@ -35,30 +35,76 @@ jobs:
           mcpp --version
           mcpp self config --mirror GLOBAL
 
+      # The version of the specification this implementation is written against
+      # is stated once, in the manifest, and read from there. The companion
+      # implementation stated it a second time in this file and the two drifted.
+      - name: Read the specification version from the manifest
+        run: |
+          v="$(sed -n 's/^openkal[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' mcpp.toml | head -1)"
+          test -n "$v" || { echo "the manifest does not name openkal" >&2; exit 1; }
+          echo "OPENKAL_VERSION=$v" >> "$GITHUB_ENV"
+          echo "written against openkal $v"
+
       - name: Conformance
         run: |
           mcpp test 2>&1 | tee conformance.log
-          # A suite that discovered nothing reports success. Both cases are
-          # asserted to have run.
-          grep -q 'conformance_stream ... ok' conformance.log
-          grep -q 'conformance_memory ... ok' conformance.log
+
+          # A suite that discovered nothing reports success, so every suite is
+          # asserted to have run. The list is derived from the files present
+          # rather than written out here: a hand-written list names the suites
+          # that existed when it was written, and a suite added afterwards
+          # escapes the assertion silently. This assertion named two of five.
+          missing=0
+          for f in tests/*.cpp; do
+            name="$(basename "$f" .cpp)"
+            if ! grep -q "^$name \.\.\. ok" conformance.log; then
+              echo "suite did not run, or did not pass: $name" >&2
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
+      - name: The specification, at the version the manifest names
+        uses: actions/checkout@v4
+        with:
+          repository: mcpplibs/openkal
+          ref: ${{ env.OPENKAL_VERSION }}
+          path: .spec
 
       - name: The exported surface matches the specification
-        env:
-          OPENKAL_VERSION: 0.3.0
         run: |
-          # Clause 9.3. The list is fetched from the specification repository at
-          # the version this implementation is written against, so that the
-          # comparison has one source rather than a copy that can drift.
-          base="https://raw.githubusercontent.com/mcpplibs/openkal/$OPENKAL_VERSION"
-          curl -fsSL --retry 3 --retry-all-errors -o SURFACE.txt "$base/SURFACE.txt"
-          curl -fsSL --retry 3 --retry-all-errors -o check-surface.sh "$base/tools/check-surface.sh"
-          bash check-surface.sh --complete SURFACE.txt $(find target -name '*.o' | tr '\n' ' ')
+          # Clause 9.3. The list and the checker come from the specification
+          # itself rather than from a copy kept here, so that the comparison has
+          # one source. --complete because this implementation claims every
+          # interface: a name it fails to export is a failure, not an interface
+          # it declines to provide.
+          bash .spec/tools/check-surface.sh --complete .spec/SURFACE.txt \
+            $(find target -name '*.o' | tr '\n' ' ')
 
-      - name: The example runs
-        working-directory: examples/hello
+      # The program is taken from the specification rather than copied here. A
+      # copy in each implementation is a copy that can diverge, and the value of
+      # the program is precisely that every implementation runs the same one.
+      #
+      # The manifest is written here because naming the implementation is the
+      # manifest's job and not the program's, which is the arrangement the
+      # program exists to demonstrate.
+      - name: The portable program runs
         run: |
+          sed -i 's|^openkal = ".*"$|openkal = { path = ".spec" }|' mcpp.toml
+          cat > .spec/examples/portable/mcpp.toml <<'TOML'
+          [package]
+          name    = "portable"
+          version = "0.1.0"
+
+          [dependencies]
+          openkal = { path = "../.." }
+          openkal-macos = { path = "../../.." }
+          TOML
+          cd .spec/examples/portable
           mcpp run 2>&1 | tee run.log
-          grep -q 'openkal: hello' run.log
-          grep -q 'openkal: allocation succeeded' run.log
-          grep -q 'openkal: vectored writes unavailable' run.log
+          # Both directions: that the program reported, and that nothing it
+          # observed failed to hold. Asserting only the first would pass for a
+          # program that printed its failures.
+          grep -q 'openkal: the portable program, above eight interfaces' run.log
+          grep -q 'openkal: observations that did not hold: 0' run.log
+          ! grep -q 'NOT HELD' run.log

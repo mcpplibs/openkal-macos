@@ -85,6 +85,39 @@ int main() {
             check(status != 0, "a non-zero status is reported as such");
             kal_process_close(q);
         }
+
+        // Clause 7.6: the vector is passed unaltered, and argv[0] is the name
+        // the started program observes as its own.
+        //
+        // The programs started above ignore their arguments, so they cannot
+        // distinguish an implementation that passes the vector from one that
+        // prepends the path — which is how that defect survived a suite that
+        // started programs and read their statuses. A shell does distinguish
+        // them: `sh -c <script>` takes $0 from its own argv[0] when no further
+        // argument is given, so the script observes the name the caller chose.
+        // An implementation that prepended the path would give the shell an
+        // extra argument, which it would read as a script file to open, and the
+        // status would be non-zero.
+        const char* sh_paths[] = { "bin/sh", "usr/bin/sh" };
+        const kal_uintptr sh_lens[] = { 6, 10 };
+        const char* script = "test \"$0\" = openkal-observed-argv0";
+        kal_uintptr script_len = 0; while (script[script_len]) ++script_len;
+
+        kal_process r{};
+        const char*       rargv[] = { "openkal-observed-argv0", "-c", script };
+        const kal_uintptr rlens[] = { 22, 2, script_len };
+        int rrc = kal_err_invalid;
+        for (int i = 0; i < 2 && rrc != kal_ok; ++i)
+            rrc = kal_process_spawn(slash, sh_paths[i], sh_lens[i], rargv, rlens, 3,
+                                    nullptr, nullptr, 0, nullptr, &r);
+        check(rrc == kal_ok, "a shell is started");
+        if (rrc == kal_ok) {
+            int status = -1, terminated = -1;
+            kal_process_wait(r, &status, &terminated);
+            check(status == 0 && terminated == 0,
+                  "the started program observes the argument vector the caller supplied, unaltered");
+            kal_process_close(r);
+        }
     }
 
     // A name that ascends is refused here as it is in the file system.

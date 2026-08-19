@@ -69,7 +69,10 @@ int kal_process_spawn(kal_dir base,
     if (!p.ok) return kal_err_invalid;
 
     vector args, envs;
-    args.add(p.buf, path_len);                       // the started program's own name
+    // The vector is passed unaltered. Clause 7.6: argv[0] is the name the
+    // started program observes as its own, and it is the caller's to choose —
+    // the started program reads it through kal_env_arg(0), so a caller that did
+    // not supply it could not predict what the program would read.
     for (kal_uintptr i = 0; i < argc; ++i) args.add(argv[i], argv_lens[i]);
     for (kal_uintptr i = 0; i < envc; ++i) envs.add(envp[i], envp_lens[i]);
     if (!args.ok || !envs.ok) return kal_err_no_memory;

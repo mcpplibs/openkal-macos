@@ -1,11 +1,11 @@
 [package]
 namespace   = "mcpplibs"
 name        = "openkal-macos"
-version     = "0.1.0"
+version     = "0.2.0"
 description = "An implementation of openkal for macOS. Its purpose is as much to test the specification as to be used: a specification satisfied only by the system it was written against has not been shown to be portable."
 license     = "Apache-2.0"
 authors     = ["mcpplibs"]
 repo        = "https://github.com/mcpplibs/openkal-macos"
 
 [dependencies]
-openkal = "0.3.0"
+openkal = "0.4.0"
