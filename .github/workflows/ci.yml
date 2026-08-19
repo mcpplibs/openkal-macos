@@ -90,7 +90,11 @@ jobs:
       # program exists to demonstrate.
       - name: The portable program runs
         run: |
-          sed -i 's|^openkal = ".*"$|openkal = { path = ".spec" }|' mcpp.toml
+          # Not `sed -i`: BSD sed requires a backup suffix after -i and reads
+          # the next word as one, so the GNU form fails on macOS with
+          # `invalid command code m`. This form is the same on both.
+          sed 's|^openkal = ".*"$|openkal = { path = ".spec" }|' mcpp.toml > mcpp.toml.next
+          mv mcpp.toml.next mcpp.toml
           cat > .spec/examples/portable/mcpp.toml <<'TOML'
           [package]
           name    = "portable"
