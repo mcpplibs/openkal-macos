@@ -46,6 +46,8 @@ jobs:
                    open openat openat_nocancel renameat faccessat unlinkat \
                    readlinkat mkdirat rmdir unlink mkdir rename access \
                    ulock_wait ulock_wake __ulock_wait __ulock_wake \
+                   futimens utimensat futimes utimes settimeofday \
+                   fchmod fchmodat fcntl \
                    pipe sigaction; do
             printf '%-24s' "$n"
             grep -E "^#define[[:space:]]+SYS_${n}[[:space:]]" "$h" | head -1 || echo '(absent)'
