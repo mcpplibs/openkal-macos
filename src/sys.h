@@ -278,19 +278,24 @@ inline void relax() {
 #endif
 }
 
-// The identity of the calling context, in one instruction. Both architectures
-// reserve a register for the current thread's own record, and this system's
-// thread library fills it; the value is distinct per context and stable within
-// one, which is all the specification requires of it.
+// The identity of the calling context.
+//
+// Version 0.3 read it from the register each architecture reserves for the
+// current thread's own record, masking the low bits that carry a processor
+// number. That is one instruction and it is wrong for a context this system
+// creates by the one route a program carrying no other runtime can use: such a
+// context observes zero there. openkal requires the value to be distinct per
+// context and stable within one, and zero for every context satisfies neither
+// --- and the way it failed was a C library above openkal reading its own
+// per-context state through a null pointer, four layers from the register.
+//
+// The kernel is asked instead. It answers with the identity it gave the
+// context, which is never zero and never shared, and the cost is a call rather
+// than a load. That is the right trade for a value whose wrongness is not
+// detectable by the caller.
 inline okm_uptr current_context() {
-    okm_uptr v;
-#if defined(__aarch64__)
-    __asm__ __volatile__("mrs %0, tpidrro_el0" : "=r"(v));
-    v &= ~static_cast<okm_uptr>(7);   // the low bits carry a processor number
-#else
-    __asm__ __volatile__("movq %%gs:0, %0" : "=r"(v));
-#endif
-    return v;
+    const okm_long r = sys(nr_thread_selfid);
+    return failed(r) ? 1u : static_cast<okm_uptr>(r);
 }
 
 inline okm_uptr length(const char* s) { okm_uptr n = 0; while (s && s[n]) ++n; return n; }
