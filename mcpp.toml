@@ -1,11 +1,37 @@
 [package]
 namespace   = "mcpplibs"
 name        = "openkal-macos"
-version     = "0.2.0"
-description = "An implementation of openkal for macOS. Its purpose is as much to test the specification as to be used: a specification satisfied only by the system it was written against has not been shown to be portable."
+version     = "0.3.0"
+description = "An implementation of openkal for macOS, written on the kernel's own calls. Its purpose is as much to test the specification as to be used."
 license     = "Apache-2.0"
 authors     = ["mcpplibs"]
 repo        = "https://github.com/mcpplibs/openkal-macos"
 
 [dependencies]
-openkal = "0.4.0"
+openkal = "0.5.0"
+
+[build]
+# The flags are attached to this package's own sources rather than to the whole
+# build. A module interface records the dialect it was compiled under, so a
+# translation unit compiled without exceptions cannot import one compiled with
+# them; the conformance tests import the specification's modules, and they are
+# consumers rather than parts of the implementation.
+flags = [
+  { glob = "src/**", cxxflags = ["-fno-exceptions", "-fno-rtti",
+                                 "-fno-stack-protector"] },
+]
+
+[features]
+default = []
+
+# Whether this implementation is the whole of the program's environment.
+#
+# Ordinarily a program already carries a runtime that has received control from
+# the loader and that creates execution contexts, and this implementation
+# borrows both. That is the default.
+#
+# Where it does not, this implementation supplies the entry point and creates
+# contexts through the one name in this system's thread library that no C
+# library defines --- which is the only name reachable from a program that
+# defines every ordinary one.
+standalone = { defines = ["OKM_STANDALONE"] }

@@ -1,50 +1,71 @@
-#include <pthread.h>
-#include <sched.h>
-#include <errno.h>
-#include <stdlib.h>
-#include <time.h>
-import openkal.task;
-import openkal.types;
+#include "sys.h"
+#include <openkal/task.h>
+#include <openkal/memory.h>
 
-// ⚠️ This platform has no suspension primitive that a program may use. The
-// operation openkal declares as the boundary is therefore constructed here from
-// a mutex and a condition variable, which is the reverse of the arrangement on
-// a system that provides the primitive: there the synchronisation objects are
-// built from the primitive, and here the primitive is built from them.
+// Execution contexts, and the primitive they are built upon.
 //
-// The construction is recorded rather than concealed because it is the one
-// place in this implementation that resembles a compatibility layer. It is
-// admitted because the alternative is worse in both directions: an interface
-// offering mutexes would oblige an implementation whose environment has none to
-// construct them, and every C library above openkal would then be built upon a
-// facility it does not need. One shared pair of objects serves every address,
-// which costs contention that a program suspending on distinct addresses would
-// not otherwise pay, and which is invisible to a caller.
-namespace {
+// The primitive is a kernel call: this system has the same operation the other
+// kernel's futex provides, under a different name and with no shared ancestry,
+// and openkal's kal_task_wait is that operation. That two unrelated systems
+// offer it is the evidence that it is the shape of the thing rather than the
+// shape of one kernel.
+//
+// Contexts are not a kernel call. Creating one on this system means arranging
+// state the kernel does not arrange, and the arrangement belongs to this
+// system's thread library rather than to its kernel. Which of that library's
+// names may be used is decided by one property: a program above openkal may
+// itself define every ordinary name, so only a name no C library defines is
+// reachable. `pthread_create_from_mach_thread' is such a name, and the
+// measurement that established it is in .github/workflows/probe.yml.
+//
+// Where the program carries a runtime of its own --- the ordinary arrangement,
+// and the default --- there is no such constraint and the ordinary names are
+// used, which also avoids the cost the other arrangement pays.
 
-int translate(int e) {
-    switch (e) {
-        case EINVAL: case ESRCH: case EFAULT: return kal_err_invalid;
-        case EAGAIN:                          return kal_err_again;
-        case ENOMEM:                          return kal_err_no_memory;
-        case EPERM:                           return kal_err_permission;
-        case ENOSYS:                          return kal_err_not_supported;
-        default:                              return kal_err_io;
-    }
+#ifndef OKM_STANDALONE
+#include <pthread.h>
+#endif
+
+extern "C" {
+#ifdef OKM_STANDALONE
+int pthread_create_from_mach_thread(void** thread, const void* attr,
+                                    void* (*start)(void*), void* arg);
+#endif
 }
 
-pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t  g_cond = PTHREAD_COND_INITIALIZER;
+namespace {
 
-struct trampoline { void (*entry)(void*); void* arg; };
+struct context {
+    void (*entry)(void*);
+    void* arg;
+#ifdef OKM_STANDALONE
+    volatile okm_u32 finished;
+#else
+    unsigned long thread;
+#endif
+};
 
 void* run(void* p) {
-    trampoline* t = static_cast<trampoline*>(p);
-    void (*entry)(void*) = t->entry;
-    void* arg = t->arg;
-    ::free(t);
-    entry(arg);
+    auto* c = static_cast<context*>(p);
+    c->entry(c->arg);
+#ifdef OKM_STANDALONE
+    __atomic_store_n(&c->finished, 1u, __ATOMIC_RELEASE);
+    okm::sys(okm::nr_ulock_wake,
+             static_cast<okm_long>(okm::ul_compare_and_wait | okm::ulf_no_errno
+                                 | okm::ulf_wake_all),
+             reinterpret_cast<okm_long>(const_cast<okm_u32*>(&c->finished)), 0);
+#endif
     return nullptr;
+}
+
+int translate_posix(int e) {
+    switch (e) {
+        case okm::e_inval: case okm::e_fault: return kal_err_invalid;
+        case okm::e_again:                    return kal_err_again;
+        case okm::e_nomem:                    return kal_err_no_memory;
+        case okm::e_perm:                     return kal_err_permission;
+        default:                              return kal_err_io;
+    }
 }
 
 }  // namespace
@@ -53,70 +74,96 @@ extern "C" {
 
 int kal_task_start(void (*entry)(void*), void* arg, kal_task* out) {
     if (entry == nullptr || out == nullptr) return kal_err_invalid;
-    trampoline* t = static_cast<trampoline*>(::malloc(sizeof(trampoline)));
-    if (t == nullptr) return kal_err_no_memory;
-    t->entry = entry; t->arg = arg;
+    auto* c = static_cast<context*>(kal_alloc(sizeof(context), alignof(context)));
+    if (c == nullptr) return kal_err_no_memory;
+    okm::fill(c, 0, sizeof(context));
+    c->entry = entry; c->arg = arg;
+
+#ifdef OKM_STANDALONE
+    void* thread = nullptr;
+    const int rc = pthread_create_from_mach_thread(&thread, nullptr, run, c);
+#else
     pthread_t id{};
-    const int rc = ::pthread_create(&id, nullptr, run, t);
-    if (rc != 0) { ::free(t); return translate(rc); }
-    *out = kal_task{ reinterpret_cast<kal_uintptr>(id) };
+    const int rc = ::pthread_create(&id, nullptr, run, c);
+    if (rc == 0) c->thread = static_cast<unsigned long>(reinterpret_cast<okm_uptr>(id));
+#endif
+    if (rc != 0) { kal_free(c, sizeof(context), alignof(context)); return translate_posix(rc); }
+    *out = kal_task{ reinterpret_cast<kal_uintptr>(c) };
     return kal_ok;
 }
 
 int kal_task_join(kal_task h) {
-    const int rc = ::pthread_join(reinterpret_cast<pthread_t>(h.h), nullptr);
-    return rc == 0 ? kal_ok : translate(rc);
-}
-
-void kal_task_yield(void) { ::sched_yield(); }
-
-kal_uintptr kal_task_current(void) {
-    return reinterpret_cast<kal_uintptr>(::pthread_self());
-}
-
-int kal_task_wait(const __UINT32_TYPE__* word, __UINT32_TYPE__ expected,
-                  __UINT64_TYPE__ timeout_ns) {
-    ::pthread_mutex_lock(&g_lock);
-    // The comparison occurs while the lock is held, and the wait releases it
-    // atomically, so the value cannot change unobserved between the two. That
-    // is the property the interface requires, and it is why the comparison
-    // cannot be performed by the caller.
-    if (__atomic_load_n(word, __ATOMIC_SEQ_CST) != expected) {
-        ::pthread_mutex_unlock(&g_lock);
-        return kal_ok;
+    auto* c = reinterpret_cast<context*>(h.h);
+    if (c == nullptr) return kal_err_invalid;
+#ifdef OKM_STANDALONE
+    // Waited for with the primitive rather than with the thread library's own
+    // wait, because that one's name is among the ones a program above may
+    // define. The word the context sets before it ends is what is waited upon.
+    while (__atomic_load_n(&c->finished, __ATOMIC_ACQUIRE) == 0) {
+        okm::sys(okm::nr_ulock_wait,
+                 static_cast<okm_long>(okm::ul_compare_and_wait | okm::ulf_no_errno),
+                 reinterpret_cast<okm_long>(const_cast<okm_u32*>(&c->finished)), 0, 0);
     }
-    int rc = 0;
-    if (timeout_ns == 0) {
-        rc = ::pthread_cond_wait(&g_cond, &g_lock);
-    } else {
-        timespec now{};
-        clock_gettime(CLOCK_REALTIME, &now);
-        __UINT64_TYPE__ total = static_cast<__UINT64_TYPE__>(now.tv_nsec) + timeout_ns;
-        timespec until{ now.tv_sec + static_cast<time_t>(total / 1000000000u),
-                        static_cast<long>(total % 1000000000u) };
-        rc = ::pthread_cond_timedwait(&g_cond, &g_lock, &until);
-    }
-    ::pthread_mutex_unlock(&g_lock);
-    if (rc == 0) return kal_ok;
-    if (rc == ETIMEDOUT) return kal_err_again;
-    return translate(rc);
-}
-
-int kal_task_wake(const __UINT32_TYPE__*, kal_uintptr count, kal_uintptr* woken) {
-    ::pthread_mutex_lock(&g_lock);
-    // One pair of objects serves every address, so a wake reaches contexts
-    // suspended upon other addresses as well. They observe that their own
-    // condition still holds and suspend again, which the interface permits: it
-    // requires a caller to re-examine its condition after waking.
-    if (count == 1) ::pthread_cond_signal(&g_cond);
-    else if (count > 1) ::pthread_cond_broadcast(&g_cond);
-    ::pthread_mutex_unlock(&g_lock);
-    if (woken) *woken = count;
+#else
+    const int rc = ::pthread_join(reinterpret_cast<pthread_t>(c->thread), nullptr);
+    if (rc != 0) return translate_posix(rc);
+#endif
+    kal_free(c, sizeof(context), alignof(context));
     return kal_ok;
 }
 
+void kal_task_yield(void) { okm::relax(); }
+
+kal_uintptr kal_task_current(void) { return okm::current_context(); }
+
+int kal_task_wait(const __UINT32_TYPE__* word, __UINT32_TYPE__ expected,
+                  __UINT64_TYPE__ timeout_ns) {
+    // The unit this system takes is the microsecond, and zero means no timeout.
+    // A timeout shorter than a microsecond is rounded up rather than down: a
+    // wait that returned before the time it was given would make every timed
+    // wait above it wrong.
+    okm_u32 microseconds = 0;
+    if (timeout_ns != 0) {
+        const __UINT64_TYPE__ rounded = (timeout_ns + 999u) / 1000u;
+        microseconds = rounded > 0xfffffffeu ? 0xfffffffeu : static_cast<okm_u32>(rounded);
+    }
+    for (;;) {
+        const okm_long r = okm::sys(okm::nr_ulock_wait,
+                                    static_cast<okm_long>(okm::ul_compare_and_wait
+                                                        | okm::ulf_no_errno),
+                                    reinterpret_cast<okm_long>(const_cast<__UINT32_TYPE__*>(word)),
+                                    static_cast<okm_long>(expected),
+                                    static_cast<okm_long>(microseconds));
+        if (r >= 0) return kal_ok;
+        // The value had already changed, which is a successful outcome: the
+        // caller's condition no longer holds and it should re-examine it.
+        if (r == -okm::e_again) return kal_ok;
+        if (okm::interrupted(r)) continue;
+        if (r == -okm::e_timedout) return kal_err_again;
+        return okm::translate(r);
+    }
+}
+
+int kal_task_wake(const __UINT32_TYPE__* word, kal_uintptr count, kal_uintptr* woken) {
+    if (count == 0) { if (woken) *woken = 0; return kal_ok; }
+    okm_long operation = okm::ul_compare_and_wait | okm::ulf_no_errno;
+    if (count > 1) operation |= okm::ulf_wake_all;
+    const okm_long r = okm::sys(okm::nr_ulock_wake, operation,
+                                reinterpret_cast<okm_long>(const_cast<__UINT32_TYPE__*>(word)), 0);
+    // This system reports that nothing was waiting as a failure. Nothing having
+    // been waiting is not a failure of the operation, so it is reported as none
+    // woken.
+    if (okm::failed(r) && r != -okm::e_noent) return okm::translate(r);
+    if (woken) *woken = okm::failed(r) ? 0u : count;
+    return kal_ok;
+}
+
+// A context started here observes the thread-local storage of the toolchain
+// that compiled the program: this system's thread library establishes it for
+// every context it creates, which is why the position can be reported without
+// this implementation doing anything to earn it.
 const kal_uintptr kal_task_props =
-    kal::task::prop_preemptive | kal::task::prop_parallel
-  | kal::task::prop_wait_timeout;
+    KAL_TASK_PROP_PREEMPTIVE | KAL_TASK_PROP_PARALLEL
+  | KAL_TASK_PROP_WAIT_TIMEOUT | KAL_TASK_PROP_THREAD_LOCAL;
 
 }
