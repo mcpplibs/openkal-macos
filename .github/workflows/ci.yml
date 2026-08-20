@@ -39,7 +39,7 @@ jobs:
           # convention, the register the current context is reached through and
           # one field of a signal context do not, so both are built.
           - { os: macos-14, toolchain: 'llvm@20.1.7' }
-          - { os: macos-13, toolchain: 'llvm@20.1.7' }
+          - { os: macos-15-intel, toolchain: 'llvm@20.1.7' }
     steps:
       - uses: actions/checkout@v4
 
