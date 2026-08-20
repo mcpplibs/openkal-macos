@@ -46,8 +46,13 @@ int kal_stream_flush(kal_stream s) {
     // A stream that cannot be committed --- a terminal, a pipe --- has nothing
     // to commit, and reporting that as a failure would oblige every caller to
     // distinguish it from a failure to reach a medium.
+    // This kernel refuses the call outright for anything that is not a file:
+    // its own code says so before it reaches a medium, and the value it uses is
+    // the one for an operation the object does not support. Measured on the
+    // system --- a pipe, which is what a stream is when a program's output is
+    // read by another program.
     if (r == -okm::e_inval || r == -okm::e_notty || r == -okm::e_badf
-        || r == -okm::e_opnotsupp) return kal_ok;
+        || r == -okm::e_opnotsupp || r == -okm::e_notsup) return kal_ok;
     return okm::translate(r);
 }
 

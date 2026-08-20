@@ -158,6 +158,10 @@ enum : int {
     e_inval = 22, e_nfile = 23, e_mfile = 24, e_notty = 25, e_fbig = 27,
     e_nospc = 28, e_spipe = 29, e_rofs = 30, e_pipe = 32, e_range = 34,
     e_nametoolong = 63, e_nosys = 78, e_notempty = 66, e_loop = 62,
+    // This system has two values for an operation the object does not support,
+    // and they are different numbers: 45 is the one a call upon a resource of
+    // the wrong kind returns, and 102 is the one a socket returns.
+    e_notsup = 45,
     e_timedout = 60, e_connreset = 54, e_dquot = 69, e_opnotsupp = 102,
 };
 
@@ -192,7 +196,7 @@ inline int translate(okm_long r) {
         case e_nomem:                                    return 4;  // no memory
         case e_nospc: case e_fbig: case e_dquot:         return 5;  // no space
         case e_acces: case e_perm: case e_rofs:          return 6;  // permission
-        case e_nosys: case e_opnotsupp:                  return 7;  // unsupported
+        case e_nosys: case e_opnotsupp: case e_notsup:   return 7;  // unsupported
         case e_pipe: case e_connreset:                   return 8;  // closed
         case e_noent: case e_child: case e_nodev:        return 9;  // not found
         case e_exist: case e_busy:                       return 10; // exists
