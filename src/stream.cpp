@@ -1,26 +1,5 @@
-#include <unistd.h>
-#include <errno.h>
-import openkal.stream;
-
-namespace {
-
-// Platform error values are translated, not forwarded. The translation is a
-// table; it does not reconstruct a foreign namespace, and the distinction is
-// what keeps the implementation free of a compatibility layer.
-int translate(int e) {
-    switch (e) {
-        case EBADF: case EINVAL: case EFAULT:  return kal_err_invalid;
-        case EAGAIN:                            return kal_err_again;
-        case ENOMEM:                            return kal_err_no_memory;
-        case ENOSPC: case EFBIG:                return kal_err_no_space;
-        case EACCES: case EPERM:                return kal_err_permission;
-        case EPIPE: case ECONNRESET:            return kal_err_closed;
-        case ENOTSUP:                           return kal_err_not_supported;
-        default:                                return kal_err_io;
-    }
-}
-
-}  // namespace
+#include "sys.h"
+#include <openkal/stream.h>
 
 extern "C" {
 
@@ -32,16 +11,16 @@ kal_io_result kal_stream_write(kal_stream s, const void* buf, kal_uintptr len) {
     const auto* p = static_cast<const unsigned char*>(buf);
     kal_uintptr done = 0;
     while (done < len) {
-        const auto r = ::write(static_cast<int>(s.h), p + done, len - done);
-        if (r < 0) {
-            // An interrupted call is retried rather than reported. A caller
-            // cannot distinguish this condition from a genuine failure without
-            // knowledge of the platform, and an implementation that reports it
-            // produces short writes on any system that delivers signals ---
-            // a failure mode that a test suite is unlikely to reproduce.
-            if (errno == EINTR) continue;
-            return { done, translate(errno) };
-        }
+        const okm_long r = okm::sys(okm::nr_write, static_cast<okm_long>(s.h),
+                                    reinterpret_cast<okm_long>(p + done),
+                                    static_cast<okm_long>(len - done));
+        // An interrupted call is retried rather than reported. Clause 7.5: a
+        // caller cannot distinguish this condition from a genuine failure
+        // without knowledge of the environment, and an implementation that
+        // reports it produces short writes on any system that delivers
+        // signals --- a failure a test suite is unlikely to reproduce.
+        if (okm::interrupted(r)) continue;
+        if (okm::failed(r)) return { done, okm::translate(r) };
         if (r == 0) break;
         done += static_cast<kal_uintptr>(r);
     }
@@ -50,22 +29,46 @@ kal_io_result kal_stream_write(kal_stream s, const void* buf, kal_uintptr len) {
 
 kal_io_result kal_stream_read(kal_stream s, void* buf, kal_uintptr len) {
     for (;;) {
-        const auto r = ::read(static_cast<int>(s.h), buf, len);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            return { 0, translate(errno) };
-        }
-        // A short read is reported as it occurred. Unlike a short write, it
-        // carries information the caller requires: a result of zero denotes
-        // end of input.
+        const okm_long r = okm::sys(okm::nr_read, static_cast<okm_long>(s.h),
+                                    reinterpret_cast<okm_long>(buf),
+                                    static_cast<okm_long>(len));
+        if (okm::interrupted(r)) continue;
+        if (okm::failed(r)) return { 0, okm::translate(r) };
+        // A short read is reported as it occurred. Unlike a short write it
+        // carries information the caller requires: zero denotes end of input.
         return { static_cast<kal_uintptr>(r), kal_ok };
     }
 }
 
-int kal_stream_flush(kal_stream) {
-    // Descriptors are unbuffered at this level, so the operation has nothing
-    // to commit and reports success.
-    return kal_ok;
+int kal_stream_flush(kal_stream s) {
+    const okm_long r = okm::sys(okm::nr_fsync, static_cast<okm_long>(s.h));
+    if (!okm::failed(r)) return kal_ok;
+    // A stream that cannot be committed --- a terminal, a pipe --- has nothing
+    // to commit, and reporting that as a failure would oblige every caller to
+    // distinguish it from a failure to reach a medium.
+    // This kernel refuses the call outright for anything that is not a file:
+    // its own code says so before it reaches a medium, and the value it uses is
+    // the one for an operation the object does not support. Measured on the
+    // system --- a pipe, which is what a stream is when a program's output is
+    // read by another program.
+    if (r == -okm::e_inval || r == -okm::e_notty || r == -okm::e_badf
+        || r == -okm::e_opnotsupp || r == -okm::e_notsup) return kal_ok;
+    return okm::translate(r);
+}
+
+kal_uintptr kal_stream_props(kal_stream s) {
+    // The enquiry this kernel offers is an attempt to read a terminal's
+    // settings: it succeeds for a terminal and reports that the stream is not
+    // one otherwise. It is the same question every C library asks before
+    // choosing a buffering discipline, and it is asked here so that the library
+    // above need not know which environment it is upon.
+    unsigned char termios[128] = { 0 };
+    // TIOCGETA, which this system spells with the size of the structure in the
+    // request itself.
+    constexpr okm_long tiocgeta = 0x40000000L | (72L << 16) | ('t' << 8) | 19;
+    const okm_long r = okm::sys(okm::nr_ioctl, static_cast<okm_long>(s.h), tiocgeta,
+                                reinterpret_cast<okm_long>(termios));
+    return okm::failed(r) ? kal_uintptr{0} : KAL_STREAM_PROP_INTERACTIVE;
 }
 
 }
