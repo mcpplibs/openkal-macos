@@ -19,7 +19,7 @@
 
 extern "C" {
 // Elapsed nanoseconds from an unspecified origin. A name no C library defines.
-__UINT64_TYPE__ clock_gettime_nsec_np(int clock);
+kal_u64 clock_gettime_nsec_np(int clock);
 }
 
 namespace {

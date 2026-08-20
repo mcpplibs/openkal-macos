@@ -1,0 +1,65 @@
+name: numbers
+
+# The kernel's own table, read from the system rather than remembered.
+#
+# src/sys.h states a number for each call this implementation makes. A number
+# that is wrong for one architecture is not a compile error and not a failed
+# call: the kernel raises a signal whose name is "bad system call" and the
+# program stops, which is a diagnostic that names the program rather than the
+# number. So the numbers are read from the system's own header, on both
+# architectures, and this workflow is where the reading is recorded.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/numbers.yml'
+
+jobs:
+  numbers:
+    name: the kernel's numbers (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Where the table is
+        run: |
+          uname -m
+          xcrun --show-sdk-path
+          find "$(xcrun --show-sdk-path)/usr/include/sys" -name 'syscall.h'
+
+      - name: Every number this implementation uses
+        run: |
+          h="$(xcrun --show-sdk-path)/usr/include/sys/syscall.h"
+          for n in exit read write close wait4 chdir fchdir fork getpid getuid \
+                   geteuid kill dup getegid getgid ioctl execve umask munmap \
+                   mprotect madvise dup2 fsync gettimeofday readv writev \
+                   ftruncate truncate mmap lseek __getcwd getcwd \
+                   stat stat64 fstat fstat64 lstat lstat64 \
+                   fstatat fstatat64 getdirentries getdirentries64 \
+                   bsdthread_terminate thread_selfid \
+                   open openat openat_nocancel renameat faccessat unlinkat \
+                   readlinkat mkdirat rmdir unlink mkdir rename access \
+                   ulock_wait ulock_wake __ulock_wait __ulock_wake \
+                   pipe sigaction; do
+            printf '%-24s' "$n"
+            grep -E "^#define[[:space:]]+SYS_${n}[[:space:]]" "$h" | head -1 || echo '(absent)'
+          done
+
+      - name: The whole table, for the record
+        run: |
+          h="$(xcrun --show-sdk-path)/usr/include/sys/syscall.h"
+          wc -l "$h"
+          grep -c '^#define' "$h"
+          # Uploaded rather than printed in full: it is nine hundred lines.
+          cp "$h" "syscall-$(uname -m).h"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syscall-numbers-${{ matrix.os }}
+          path: syscall-*.h

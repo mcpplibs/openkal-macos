@@ -116,22 +116,22 @@ void kal_task_yield(void) { okm::relax(); }
 
 kal_uintptr kal_task_current(void) { return okm::current_context(); }
 
-int kal_task_wait(const __UINT32_TYPE__* word, __UINT32_TYPE__ expected,
-                  __UINT64_TYPE__ timeout_ns) {
+int kal_task_wait(const kal_u32* word, kal_u32 expected,
+                  kal_u64 timeout_ns) {
     // The unit this system takes is the microsecond, and zero means no timeout.
     // A timeout shorter than a microsecond is rounded up rather than down: a
     // wait that returned before the time it was given would make every timed
     // wait above it wrong.
     okm_u32 microseconds = 0;
     if (timeout_ns != 0) {
-        const __UINT64_TYPE__ rounded = (timeout_ns + 999u) / 1000u;
+        const kal_u64 rounded = (timeout_ns + 999u) / 1000u;
         microseconds = rounded > 0xfffffffeu ? 0xfffffffeu : static_cast<okm_u32>(rounded);
     }
     for (;;) {
         const okm_long r = okm::sys(okm::nr_ulock_wait,
                                     static_cast<okm_long>(okm::ul_compare_and_wait
                                                         | okm::ulf_no_errno),
-                                    reinterpret_cast<okm_long>(const_cast<__UINT32_TYPE__*>(word)),
+                                    reinterpret_cast<okm_long>(const_cast<kal_u32*>(word)),
                                     static_cast<okm_long>(expected),
                                     static_cast<okm_long>(microseconds));
         if (r >= 0) return kal_ok;
@@ -144,12 +144,12 @@ int kal_task_wait(const __UINT32_TYPE__* word, __UINT32_TYPE__ expected,
     }
 }
 
-int kal_task_wake(const __UINT32_TYPE__* word, kal_uintptr count, kal_uintptr* woken) {
+int kal_task_wake(const kal_u32* word, kal_uintptr count, kal_uintptr* woken) {
     if (count == 0) { if (woken) *woken = 0; return kal_ok; }
     okm_long operation = okm::ul_compare_and_wait | okm::ulf_no_errno;
     if (count > 1) operation |= okm::ulf_wake_all;
     const okm_long r = okm::sys(okm::nr_ulock_wake, operation,
-                                reinterpret_cast<okm_long>(const_cast<__UINT32_TYPE__*>(word)), 0);
+                                reinterpret_cast<okm_long>(const_cast<kal_u32*>(word)), 0);
     // This system reports that nothing was waiting as a failure. Nothing having
     // been waiting is not a failure of the operation, so it is reported as none
     // woken.

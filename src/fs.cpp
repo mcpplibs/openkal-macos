@@ -55,8 +55,8 @@ int kind_of(okm_u32 mode) {
 void fill_info(const okm::kstat64& st, kal_node_info* out) {
     *out = kal_node_info{
         static_cast<kal_uintptr>(st.size),
-        static_cast<__UINT64_TYPE__>(st.mtime_sec) * 1000000000u
-            + static_cast<__UINT64_TYPE__>(st.mtime_nsec),
+        static_cast<kal_u64>(st.mtime_sec) * 1000000000u
+            + static_cast<kal_u64>(st.mtime_nsec),
         kind_of(okm::stat_mode(st)),
         (okm::stat_mode(st) & 0200u) != 0 ? 1 : 0,
     };
@@ -146,7 +146,7 @@ kal_uintptr kal_fs_stream(kal_file f) {
     return fd < 0 ? 0u : static_cast<kal_uintptr>(fd);
 }
 
-int kal_fs_seek(kal_file f, __INT64_TYPE__ offset, int whence, __UINT64_TYPE__* result) {
+int kal_fs_seek(kal_file f, kal_i64 offset, int whence, kal_u64* result) {
     const int fd = okm::unpack(f.h);
     if (fd < 0) return kal_err_invalid;
     int w = 0;
@@ -154,11 +154,11 @@ int kal_fs_seek(kal_file f, __INT64_TYPE__ offset, int whence, __UINT64_TYPE__* 
     else if (whence == KAL_SEEK_END) w = 2;
     const okm_long r = okm::sys(okm::nr_lseek, fd, static_cast<okm_long>(offset), w);
     if (okm::failed(r)) return okm::translate(r);
-    if (result) *result = static_cast<__UINT64_TYPE__>(r);
+    if (result) *result = static_cast<kal_u64>(r);
     return kal_ok;
 }
 
-int kal_fs_truncate(kal_file f, __UINT64_TYPE__ size) {
+int kal_fs_truncate(kal_file f, kal_u64 size) {
     const int fd = okm::unpack(f.h);
     if (fd < 0) return kal_err_invalid;
     const okm_long r = okm::sys(okm::nr_ftruncate, fd, static_cast<okm_long>(size));
