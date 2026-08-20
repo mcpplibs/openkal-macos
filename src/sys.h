@@ -94,6 +94,7 @@ enum : okm_long {
     nr_munmap = 73, nr_mprotect = 74, nr_madvise = 75,
     nr_dup2 = 90, nr_fsync = 95, nr_gettimeofday = 116,
     nr_readv = 120, nr_writev = 121, nr_ftruncate = 201,
+    nr_utimes = 138, nr_futimes = 139,
     nr_mmap = 197, nr_lseek = 199,
     nr_getcwd = 326, nr_stat64 = 338, nr_fstat64 = 339, nr_lstat64 = 340,
     nr_getdirentries64 = 344, nr_bsdthread_terminate = 361,

@@ -196,6 +196,36 @@ int kal_fs_file_info(kal_file f, kal_node_info* out) {
     return kal_ok;
 }
 
+int kal_fs_set_modified(kal_file f, kal_u64 modified_ns) {
+    const int fd = okm::unpack(f.h);
+    if (fd < 0) return kal_err_invalid;
+    // This kernel's call takes both times and takes them in microseconds, so
+    // two things are true of it that are not true of the interface: the access
+    // time cannot be left alone, and a nanosecond cannot be expressed.
+    //
+    // The access time is therefore read and written back, which is the nearest
+    // thing to leaving it alone that the call permits, and the value written is
+    // the one the file already had. The nanoseconds below a microsecond are
+    // lost, which is why the conformance suite compares whole seconds: an
+    // interface that required nanoseconds of every environment would be
+    // requiring a resolution three of the environments openkal is implemented
+    // on do not agree upon.
+    okm::kstat64 st{};
+    okm_long r = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
+    if (okm::failed(r)) return okm::translate(r);
+
+    okm::ktimeval times[2];
+    times[0].sec  = st.atime_sec;
+    times[0].usec = static_cast<int>(st.atime_nsec / 1000);
+    times[0].pad  = 0;
+    times[1].sec  = static_cast<okm_i64>(modified_ns / 1000000000u);
+    times[1].usec = static_cast<int>((modified_ns % 1000000000u) / 1000u);
+    times[1].pad  = 0;
+
+    r = okm::sys(okm::nr_futimes, fd, reinterpret_cast<okm_long>(times));
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
 int kal_fs_mkdir(kal_dir base, const char* name, kal_uintptr len) {
     const int b = okm::unpack(base.h);
     if (b < 0 || !okm::acceptable(name, len)) return kal_err_invalid;
