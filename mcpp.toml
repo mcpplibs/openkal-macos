@@ -1,14 +1,14 @@
 [package]
 namespace   = "mcpplibs"
 name        = "openkal-macos"
-version     = "0.3.0"
+version     = "0.3.1"
 description = "An implementation of openkal for macOS, written on the kernel's own calls. Its purpose is as much to test the specification as to be used."
 license     = "Apache-2.0"
 authors     = ["mcpplibs"]
 repo        = "https://github.com/mcpplibs/openkal-macos"
 
 [dependencies]
-openkal = "0.5.0"
+openkal = "0.5.1"
 
 [build]
 # The flags are attached to this package's own sources rather than to the whole
