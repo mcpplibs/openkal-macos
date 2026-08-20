@@ -95,8 +95,14 @@ enum : okm_long {
     nr_dup2 = 90, nr_fsync = 95, nr_gettimeofday = 116,
     nr_readv = 120, nr_writev = 121, nr_ftruncate = 201,
     nr_utimes = 138, nr_futimes = 139,
+    // This kernel has no call that reports the working directory --- the
+    // measurement is in .github/workflows/numbers.yml, where SYS___getcwd is
+    // absent from the system's own table. What it has instead is an enquiry
+    // upon an open file that reports the name it was reached by, and that is
+    // what a program on this system uses.
+    f_getpath = 50,
     nr_mmap = 197, nr_lseek = 199,
-    nr_getcwd = 326, nr_stat64 = 338, nr_fstat64 = 339, nr_lstat64 = 340,
+    nr_fcntl = 92, nr_stat64 = 338, nr_fstat64 = 339, nr_lstat64 = 340,
     nr_getdirentries64 = 344, nr_bsdthread_terminate = 361,
     nr_thread_selfid = 372,
     nr_openat = 463, nr_renameat = 465, nr_faccessat = 466,

@@ -24,10 +24,22 @@ preopen* table(kal_uintptr* count) {
     static bool opened = false;
     if (!opened) {
         opened = true;
-        const okm_long n = okm::sys(okm::nr_getcwd, reinterpret_cast<okm_long>(g_cwd),
-                                    static_cast<okm_long>(sizeof g_cwd));
+        // The name of the working directory. This kernel has no call that
+        // reports it: the directory is opened and asked what name it was
+        // reached by, which is the operation this system supplies instead and
+        // is what its own C library uses.
         okm_uptr cwd_len = 0;
-        if (!okm::failed(n)) cwd_len = okm::length(g_cwd);
+        {
+            const okm_long fd = okm::sys(okm::nr_openat, okm::at_fdcwd,
+                                         reinterpret_cast<okm_long>("."),
+                                         okm::o_rdonly | okm::o_directory, 0);
+            if (!okm::failed(fd)) {
+                const okm_long r = okm::sys(okm::nr_fcntl, fd, okm::f_getpath,
+                                            reinterpret_cast<okm_long>(g_cwd));
+                if (!okm::failed(r)) cwd_len = okm::length(g_cwd);
+                okm::sys(okm::nr_close, fd);
+            }
+        }
         if (cwd_len == 0) { g_cwd[0] = '.'; g_cwd[1] = '\0'; cwd_len = 1; }
 
         const okm_long fd0 = okm::sys(okm::nr_openat, okm::at_fdcwd,

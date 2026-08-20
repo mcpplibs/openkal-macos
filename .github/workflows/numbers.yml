@@ -65,3 +65,101 @@ jobs:
         with:
           name: syscall-numbers-${{ matrix.os }}
           path: syscall-*.h
+
+  # Which numbers this kernel actually serves.
+  #
+  # A number that is in the system's table and not in the kernel's is not a
+  # failed call: the kernel raises a signal whose name is "bad system call" and
+  # the program stops, which is a diagnostic that names the program rather than
+  # the number. Reading the table above does not distinguish the two, so this
+  # job issues each call with arguments that cannot do harm and reports which
+  # of them the kernel refuses to recognise.
+  served:
+    name: the numbers this kernel serves (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Issue each call and report what the kernel does with it
+        run: |
+          cat > served.c <<'EOF'
+          #include <setjmp.h>
+          #include <signal.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <errno.h>
+
+          static sigjmp_buf back;
+          static void on_bad(int s) { (void)s; siglongjmp(back, 1); }
+
+          extern long syscall(long, ...);
+
+          /* Every number src/sys.h states, with arguments chosen so that the
+           * call either fails harmlessly or does nothing. A call that returns
+           * or fails is served; a call that does neither raised the signal. */
+          struct probe { const char* name; long n; long a, b, c, d; };
+          static const struct probe probes[] = {
+            { "close",            6,   -1, 0, 0, 0 },
+            { "wait4",            7,   -1, 0, 1, 0 },   /* WNOHANG */
+            { "fchdir",          13,   -1, 0, 0, 0 },
+            { "dup",             41,   -1, 0, 0, 0 },
+            { "ioctl",           54,   -1, 0, 0, 0 },
+            { "munmap",          73,    0, 0, 0, 0 },
+            { "mprotect",        74,    0, 0, 0, 0 },
+            { "madvise",         75,    0, 0, 0, 0 },
+            { "dup2",            90,   -1, -1, 0, 0 },
+            { "fcntl",           92,   -1, 50, 0, 0 },  /* F_GETPATH */
+            { "fsync",           95,   -1, 0, 0, 0 },
+            { "gettimeofday",   116,    0, 0, 0, 0 },
+            { "readv",          120,   -1, 0, 0, 0 },
+            { "writev",         121,   -1, 0, 0, 0 },
+            { "utimes",         138,    0, 0, 0, 0 },
+            { "futimes",        139,   -1, 0, 0, 0 },
+            { "mmap",           197,    0, 0, 0, 0 },
+            { "lseek",          199,   -1, 0, 0, 0 },
+            { "ftruncate",      201,   -1, 0, 0, 0 },
+            { "stat64",         338,    0, 0, 0, 0 },
+            { "fstat64",        339,   -1, 0, 0, 0 },
+            { "lstat64",        340,    0, 0, 0, 0 },
+            { "getdirentries64",344,   -1, 0, 0, 0 },
+            { "thread_selfid",  372,    0, 0, 0, 0 },
+            { "openat",         463,   -2, 0, 0, 0 },
+            { "renameat",       465,   -2, 0, -2, 0 },
+            { "faccessat",      466,   -2, 0, 0, 0 },
+            { "fstatat64",      470,   -2, 0, 0, 0 },
+            { "unlinkat",       472,   -2, 0, 0, 0 },
+            { "readlinkat",     473,   -2, 0, 0, 0 },
+            { "mkdirat",        475,   -2, 0, 0, 0 },
+            { "ulock_wait",     515,    0, 0, 0, 0 },
+            { "ulock_wake",     516,    0, 0, 0, 0 },
+          };
+
+          int main(void) {
+            struct sigaction sa; memset(&sa, 0, sizeof sa);
+            sa.sa_handler = on_bad;
+            sigaction(SIGSYS, &sa, 0);
+            int refused = 0;
+            for (unsigned i = 0; i < sizeof probes / sizeof *probes; i++) {
+              if (sigsetjmp(back, 1) == 0) {
+                errno = 0;
+                long r = syscall(probes[i].n, probes[i].a, probes[i].b,
+                                 probes[i].c, probes[i].d);
+                printf("%-18s %4ld  served   (returned %ld, errno %d)\n",
+                       probes[i].name, probes[i].n, r, errno);
+              } else {
+                printf("%-18s %4ld  REFUSED  (bad system call)\n",
+                       probes[i].name, probes[i].n);
+                refused++;
+              }
+            }
+            printf("\n%d refused\n", refused);
+            return refused ? 1 : 0;
+          }
+          EOF
+          cc -O0 -o served served.c
+          ./served
