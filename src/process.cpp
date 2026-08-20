@@ -55,7 +55,6 @@ struct vector {
     }
 };
 
-constexpr okm_long nr_fork = 2;
 constexpr okm_long nr_fchdir = 13;
 
 }  // namespace
@@ -86,14 +85,15 @@ int kal_process_spawn(kal_dir base,
     const okm_long ou = streams ? static_cast<okm_long>(streams->out) : 0;
     const okm_long er = streams ? static_cast<okm_long>(streams->err) : 0;
 
-    const okm_long child = okm::sys(nr_fork);
+    bool is_duplicate = false;
+    const okm_long child = okm::duplicate(is_duplicate);
     if (okm::failed(child)) return okm::translate(child);
 
-    // On this system the duplicate is distinguished by a second value the call
-    // returns rather than by the first alone, and the register it arrives in
-    // differs by architecture. What is portable between them is that the
-    // duplicate observes a first value of zero, which is what is used.
-    if (child == 0) {
+    // The duplicate is distinguished by the second value the call returns and
+    // not by the first: both images receive the same first value here. The
+    // reason, and what happens to an implementation that tests the first alone,
+    // are in src/sys.h beside the call.
+    if (is_duplicate) {
         if (in != 0) okm::sys(okm::nr_dup2, in, 0);
         if (ou != 0) okm::sys(okm::nr_dup2, ou, 1);
         if (er != 0) okm::sys(okm::nr_dup2, er, 2);

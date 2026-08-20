@@ -83,6 +83,45 @@ inline okm_long sys(okm_long n, okm_long a = 0, okm_long b = 0, okm_long c = 0,
 #error "openkal-macos supports x86_64 and arm64"
 #endif
 
+// Duplicating the calling image, which is the one call whose result does not
+// fit the convention above.
+//
+// This kernel reports which image is which in the *second* register: both
+// receive the same first value, and the second is zero in the original and one
+// in the duplicate. That is the BSD convention, and it is not the other
+// kernel's --- there the duplicate is told by receiving a first value of zero.
+// An implementation that tested the first value alone would have both images
+// take the original's branch, so the duplicate would carry on running the
+// program instead of replacing itself, and the original would wait for a
+// program that never starts.
+//
+// This system's own C library hides the difference by forcing the duplicate's
+// first value to zero in its wrapper. There is no wrapper here, so the
+// difference is met rather than hidden.
+inline okm_long duplicate(bool& is_duplicate) {
+#if defined(__aarch64__)
+    register okm_long x16 __asm__("x16") = 2;   // fork
+    register okm_long x0 __asm__("x0") = 0;
+    register okm_long x1 __asm__("x1") = 0;
+    okm_long failed;
+    __asm__ __volatile__("svc #0x80\n\tcset %2, cs"
+                         : "+r"(x0), "+r"(x1), "=r"(failed)
+                         : "r"(x16)
+                         : "memory", "cc");
+    is_duplicate = x1 != 0;
+    return failed ? -x0 : x0;
+#else
+    okm_long first, second;
+    unsigned char failed;
+    __asm__ __volatile__("syscall"
+                         : "=a"(first), "=d"(second), "=@ccc"(failed)
+                         : "a"(2L | 0x2000000L)
+                         : "rcx", "r11", "memory", "cc");
+    is_duplicate = second != 0;
+    return failed ? -first : first;
+#endif
+}
+
 // The numbers. They are the same on both architectures this implementation
 // supports, which is the reason the table is not per-architecture as it is on
 // the other kernel.
