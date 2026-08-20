@@ -124,13 +124,19 @@ jobs:
           #     a frame it protects; supplied by the program, not called by this
           #     implementation.
           permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|pthread_create|pthread_join|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume)$'
+          # Reported with the object that references it. A symbol without the
+          # object it came from names a fault and not a place, and the first
+          # time this check fired the answer was in the object rather than in
+          # the symbol.
           bad=0
-          for s in $(nm -u $objs | sed 's/^ *//' | grep -v ':$' | sort -u); do
-            [ -n "$s" ] || continue
-            printf '%s\n' "$s" | grep -qE "$permitted" || {
-              echo "the implementation references a symbol it must not: $s" >&2
-              bad=1
-            }
+          for o in $objs; do
+            for s in $(nm -u "$o" | sed 's/^ *//' | grep -v ':$' | sort -u); do
+              [ -n "$s" ] || continue
+              printf '%s\n' "$s" | grep -qE "$permitted" || {
+                echo "$o references a symbol it must not: $s" >&2
+                bad=1
+              }
+            done
           done
           test "$bad" -eq 0
           echo "the implementation reaches nothing of a C library but the two names that are named"
