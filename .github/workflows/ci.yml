@@ -35,11 +35,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # arm64 and x86_64. The system-call numbers agree; the calling
-          # convention, the register the current context is reached through and
-          # one field of a signal context do not, so both are built.
+          # arm64 only, and not because the other architecture is unsupported.
+          # The build tool has no release for x86_64 on this system --- its
+          # installer answers "Unsupported release target: macosx-x86_64" --- so
+          # the suite cannot be built there at all. What can be done there is
+          # done: the `numbers' workflow measures that kernel's own table on
+          # both architectures, and the step below compiles every source for the
+          # other one with the system's compiler.
           - { os: macos-14, toolchain: 'llvm@20.1.7' }
-          - { os: macos-15-intel, toolchain: 'llvm@20.1.7' }
     steps:
       - uses: actions/checkout@v4
 
@@ -87,6 +90,22 @@ jobs:
       - name: Every interface, every kind of examination
         run: |
           bash .spec/tools/run-conformance.sh openkal-macos . full
+
+      # The other architecture, as far as this system allows it to be reached.
+      #
+      # The system-call numbers agree between the two --- measured, in the
+      # `numbers' workflow --- and three things do not: the calling convention,
+      # the register the current context is reached through, and one field of a
+      # signal context. All three are in src/sys.h and all three are compiled
+      # here, with the system's own compiler rather than the build tool's,
+      # because the build tool has no release for that architecture.
+      - name: Every source compiles for the other architecture
+        run: |
+          for f in src/*.cpp; do
+            clang++ -std=c++2b -c -o /dev/null --target=x86_64-apple-macos13 \
+              -fno-exceptions -fno-rtti -DOKM_STANDALONE -I .spec/include "$f"
+          done
+          echo "every source compiles for x86_64"
 
       - name: The exported surface is complete and contains nothing else
         run: |
