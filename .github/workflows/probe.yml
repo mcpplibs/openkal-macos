@@ -1,0 +1,242 @@
+name: probe
+
+# What this system offers, measured rather than remembered.
+#
+# An implementation that sits beneath a C library must not depend upon one, or
+# its calls resolve to the library above it and recur without bound. On Linux
+# that requirement is met by issuing system calls directly. Whether it can be
+# met here, and by what means, is a question about this system that is answered
+# by asking it: every candidate below is either confirmed or eliminated, and the
+# implementation is then written against what remains.
+#
+# The workflow is temporary. It is removed once its answers are recorded in the
+# source, and it exists in history so that the answers can be re-derived.
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, arch: arm64 }
+          - { os: macos-13, arch: x86_64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: What the system is
+        run: |
+          uname -a
+          sw_vers
+          clang --version
+          echo "arch: $(arch)"
+
+      # 1. Which names this system exports that a C library never defines.
+      #
+      # The names a C library defines are unavailable: two definitions of one
+      # name cannot both be reached from one program. The question is therefore
+      # not "does libSystem have a way to create a thread" but "does it have one
+      # under a name musl does not use".
+      - name: Names that are available because no C library defines them
+        run: |
+          cat > names.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          static const char *const candidates[] = {
+              /* threads, under names a C library does not define */
+              "pthread_create_from_mach_thread",
+              "_pthread_start", "bsdthread_create", "__bsdthread_create",
+              "thread_create_running", "mach_task_self_", "mach_thread_self",
+              "thread_terminate", "swtch_pri", "thread_switch",
+              /* the suspension primitive */
+              "__ulock_wait", "__ulock_wake", "os_sync_wait_on_address",
+              "os_sync_wake_by_address_any", "os_sync_wake_by_address_all",
+              /* time */
+              "mach_absolute_time", "mach_timebase_info",
+              "clock_gettime_nsec_np",
+              /* the error location, under the name this system uses */
+              "__error",
+              /* the cancellable variants, which are exported separately */
+              "__write_nocancel", "__read_nocancel", "__open_nocancel",
+              "__close_nocancel",
+              /* the argument vector, for an entry point that is not main */
+              "_NSGetArgc", "_NSGetArgv", "_NSGetEnviron", "_NSGetExecutablePath",
+              /* names a C library DOES define, listed so that the report shows
+                 the check can distinguish the two cases */
+              "write", "malloc", "pthread_create", "pthread_join",
+              0
+          };
+          int main(void) {
+              for (int i = 0; candidates[i]; i++) {
+                  void *p = dlsym(RTLD_DEFAULT, candidates[i]);
+                  printf("%-32s %s\n", candidates[i], p ? "present" : "absent");
+              }
+              return 0;
+          }
+          EOF
+          clang -o names names.c && ./names
+
+      # 2. Whether a program can be linked without the C library's start files
+      #    and given an entry point of its own, and what that entry receives.
+      - name: A program with its own entry point, linked without a C runtime
+        run: |
+          cat > entry.c <<'EOF'
+          /* No C library is called here. The write is a system call issued
+             directly, so that what is being tested is the entry point rather
+             than the availability of a C library. */
+          static long sys_write(int fd, const void *b, unsigned long n)
+          {
+          #if defined(__aarch64__)
+              register long x16 __asm__("x16") = 4;      /* SYS_write */
+              register long x0 __asm__("x0") = fd;
+              register long x1 __asm__("x1") = (long)b;
+              register long x2 __asm__("x2") = (long)n;
+              __asm__ __volatile__("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2)
+                                   : "memory", "cc");
+              return x0;
+          #else
+              long r;
+              register long r10 __asm__("r10");
+              __asm__ __volatile__("syscall" : "=a"(r)
+                                   : "a"(0x2000004L), "D"((long)fd), "S"((long)b), "d"((long)n)
+                                   : "rcx", "r11", "memory", "cc");
+              return r;
+          #endif
+          }
+          static void sys_exit(int code)
+          {
+          #if defined(__aarch64__)
+              register long x16 __asm__("x16") = 1;
+              register long x0 __asm__("x0") = code;
+              __asm__ __volatile__("svc #0x80" :: "r"(x16), "r"(x0) : "memory", "cc");
+          #else
+              __asm__ __volatile__("syscall" :: "a"(0x2000001L), "D"((long)code)
+                                   : "rcx", "r11", "memory", "cc");
+          #endif
+              __builtin_unreachable();
+          }
+          static unsigned len(const char *s) { unsigned n = 0; while (s[n]) n++; return n; }
+          int okm_entry(int argc, char **argv, char **envp, char **apple);
+          int okm_entry(int argc, char **argv, char **envp, char **apple)
+          {
+              sys_write(1, "entry reached\n", 14);
+              if (argc >= 1 && argv && argv[0]) {
+                  sys_write(1, "argv0=", 6); sys_write(1, argv[0], len(argv[0]));
+                  sys_write(1, "\n", 1);
+              } else sys_write(1, "argv absent\n", 12);
+              int n = 0; while (envp && envp[n]) n++;
+              sys_write(1, n ? "envp present\n" : "envp absent\n", n ? 13 : 12);
+              (void)apple;
+              sys_exit(0);
+              return 0;
+          }
+          EOF
+          echo "--- with -nostdlib and libSystem ---"
+          clang -nostdlib -Wl,-e,_okm_entry -o entry entry.c -lSystem && ./entry one two || echo "FAILED"
+          echo "--- with -nostdlib and no libSystem at all ---"
+          clang -nostdlib -Wl,-e,_okm_entry -o entry2 entry.c 2>&1 | tail -5 || true
+          ./entry2 one two || echo "a program with no dylib does not run here"
+
+      # 3. Whether the suspension primitive is reachable and behaves.
+      - name: The suspension primitive
+        run: |
+          cat > ulock.c <<'EOF'
+          #include <stdio.h>
+          #include <stdint.h>
+          #include <pthread.h>
+          extern int __ulock_wait(uint32_t operation, void *addr, uint64_t value, uint32_t timeout_us);
+          extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
+          #define UL_COMPARE_AND_WAIT 1
+          #define ULF_NO_ERRNO 0x01000000
+          static volatile uint32_t word = 0;
+          static void *waker(void *p) {
+              (void)p;
+              usleep(50000);
+              __atomic_store_n(&word, 1, __ATOMIC_RELEASE);
+              int r = __ulock_wake(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, (void *)&word, 0);
+              printf("wake returned %d\n", r);
+              return 0;
+          }
+          int main(void) {
+              pthread_t t; pthread_create(&t, 0, waker, 0);
+              int r = __ulock_wait(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, (void *)&word, 0, 0);
+              printf("wait returned %d, word=%u\n", r, word);
+              pthread_join(t, 0);
+              return word == 1 ? 0 : 1;
+          }
+          EOF
+          clang -o ulock ulock.c && ./ulock && echo "the suspension primitive works"
+
+      # 4. Whether a thread can be created under a name a C library does not use.
+      - name: Creating an execution context without the name pthread_create
+        run: |
+          cat > mt.c <<'EOF'
+          #include <stdio.h>
+          #include <pthread.h>
+          #include <stdint.h>
+          extern int pthread_create_from_mach_thread(pthread_t *, const pthread_attr_t *,
+                                                     void *(*)(void *), void *);
+          extern int __ulock_wait(uint32_t, void *, uint64_t, uint32_t);
+          extern int __ulock_wake(uint32_t, void *, uint64_t);
+          #define UL_COMPARE_AND_WAIT 1
+          #define ULF_NO_ERRNO 0x01000000
+          static volatile uint32_t done = 0;
+          static void *body(void *p) {
+              (void)p;
+              __atomic_store_n(&done, 1, __ATOMIC_RELEASE);
+              __ulock_wake(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, (void *)&done, 0);
+              return 0;
+          }
+          int main(void) {
+              pthread_t t;
+              int r = pthread_create_from_mach_thread(&t, 0, body, 0);
+              printf("pthread_create_from_mach_thread returned %d\n", r);
+              if (r) return 1;
+              while (!__atomic_load_n(&done, __ATOMIC_ACQUIRE))
+                  __ulock_wait(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, (void *)&done, 0, 0);
+              printf("the context ran and was awaited without pthread_join\n");
+              /* Whether the thread's record can be released without naming
+                 pthread_detach is the remaining question; it is reported rather
+                 than assumed. */
+              return 0;
+          }
+          EOF
+          clang -o mt mt.c && ./mt
+
+      # 5. Whether the port's assembly assembles for this object format.
+      - name: The assembly one file supplies for every object format
+        run: |
+          curl -fsSL -o okm_setjmp.S \
+            https://raw.githubusercontent.com/mcpplibs/openkal-libc/feat/musl-on-openkal/port/src/okm_setjmp.S
+          clang -c okm_setjmp.S -o okm_setjmp.o && nm -gU okm_setjmp.o
+          echo "the assembly assembles for Mach-O"
+
+      # 6. Which system calls answer.
+      - name: The system calls this implementation would issue
+        run: |
+          cat > calls.c <<'EOF'
+          #include <stdio.h>
+          #include <sys/syscall.h>
+          int main(void) {
+          #define R(n) printf("%-24s %d\n", #n, n);
+            R(SYS_read) R(SYS_write) R(SYS_close) R(SYS_exit) R(SYS_lseek)
+            R(SYS_mmap) R(SYS_munmap) R(SYS_mprotect) R(SYS_ftruncate)
+            R(SYS_fsync) R(SYS_ioctl) R(SYS_dup) R(SYS_dup2)
+            R(SYS_openat) R(SYS_unlinkat) R(SYS_renameat) R(SYS_mkdirat)
+            R(SYS_fstatat64) R(SYS_fstat64) R(SYS_getdirentries64)
+            R(SYS_readlinkat) R(SYS_faccessat) R(SYS___getcwd) R(SYS_chdir)
+            R(SYS_gettimeofday) R(SYS_wait4) R(SYS_kill) R(SYS_execve)
+            R(SYS_posix_spawn) R(SYS_getpid) R(SYS_getuid) R(SYS_geteuid)
+            R(SYS_thread_selfid) R(SYS___semwait_signal)
+            R(SYS_bsdthread_create) R(SYS_bsdthread_terminate) R(SYS_bsdthread_register)
+            R(SYS___ulock_wait) R(SYS___ulock_wake)
+            return 0;
+          }
+          EOF
+          clang -o calls calls.c && ./calls
