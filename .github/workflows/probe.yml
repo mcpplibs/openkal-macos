@@ -30,7 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: What the system is
+      - continue-on-error: true
+        name: What the system is
         run: |
           uname -a
           sw_vers
@@ -43,7 +44,8 @@ jobs:
       # name cannot both be reached from one program. The question is therefore
       # not "does libSystem have a way to create a thread" but "does it have one
       # under a name musl does not use".
-      - name: Names that are available because no C library defines them
+      - continue-on-error: true
+        name: Names that are available because no C library defines them
         run: |
           cat > names.c <<'EOF'
           #include <dlfcn.h>
@@ -84,7 +86,8 @@ jobs:
 
       # 2. Whether a program can be linked without the C library's start files
       #    and given an entry point of its own, and what that entry receives.
-      - name: A program with its own entry point, linked without a C runtime
+      - continue-on-error: true
+        name: A program with its own entry point, linked without a C runtime
         run: |
           cat > entry.c <<'EOF'
           /* No C library is called here. The write is a system call issued
@@ -144,7 +147,8 @@ jobs:
           ./entry2 one two || echo "a program with no dylib does not run here"
 
       # 3. Whether the suspension primitive is reachable and behaves.
-      - name: The suspension primitive
+      - continue-on-error: true
+        name: The suspension primitive
         run: |
           cat > ulock.c <<'EOF'
           #include <stdio.h>
@@ -174,7 +178,8 @@ jobs:
           clang -o ulock ulock.c && ./ulock && echo "the suspension primitive works"
 
       # 4. Whether a thread can be created under a name a C library does not use.
-      - name: Creating an execution context without the name pthread_create
+      - continue-on-error: true
+        name: Creating an execution context without the name pthread_create
         run: |
           cat > mt.c <<'EOF'
           #include <stdio.h>
@@ -210,7 +215,8 @@ jobs:
           clang -o mt mt.c && ./mt
 
       # 5. Whether the port's assembly assembles for this object format.
-      - name: The assembly one file supplies for every object format
+      - continue-on-error: true
+        name: The assembly one file supplies for every object format
         run: |
           curl -fsSL -o okm_setjmp.S \
             https://raw.githubusercontent.com/mcpplibs/openkal-libc/feat/musl-on-openkal/port/src/okm_setjmp.S
@@ -218,7 +224,8 @@ jobs:
           echo "the assembly assembles for Mach-O"
 
       # 6. Which system calls answer.
-      - name: The system calls this implementation would issue
+      - continue-on-error: true
+        name: The system calls this implementation would issue
         run: |
           cat > calls.c <<'EOF'
           #include <stdio.h>
