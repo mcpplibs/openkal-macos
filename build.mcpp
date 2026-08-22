@@ -14,13 +14,57 @@ import mcpp;
 // package being built — and a relative path in `ldflags` would resolve against
 // the build directory instead of against this package.
 //
-// ⚠️ NOT CONDITIONAL ON THE HOST. Measured 2026-08-23: cross-linking for this
-// system from Linux failed with `library not found for -lSystem`, because the
-// only thing that had ever put the stub on a link line was a shell script
-// (`openkal-musl/tools/cross-build-macos.sh`) that names the file directly.
-// A build tool that resolves this package should not need that script.
+// Measured 2026-08-23: cross-linking for this system from Linux failed with
+// `library not found for -lSystem`, because the only thing that had ever put
+// the stub on a link line was a shell script
+// (`openkal-musl/tools/cross-build-macos.sh`) that names the file directly. A
+// build tool that resolves this package should not need that script.
+//
+// ⚠️⚠️ AND ONLY WHEN THIS SYSTEM'S OWN STUB IS NOT PRESENT, WHICH THE FIRST
+// VERSION OF THIS FILE GOT WRONG.
+//
+// It said "not conditional on the host" and meant it as a principle. The
+// principle was aimed at the right thing — a package should not need a shell
+// script, and a cross build should not depend on where it happens — but the
+// conclusion drawn from it was false, because this file is not the only thing
+// that can put a `libSystem` on the search path. On this system, the SDK
+// already has one, it is the vendor's, and it lists everything rather than
+// three names.
+//
+// ⇒ Adding ours ahead of it does not augment it. `-L` is searched before the
+// SDK, so `-lSystem` stops at the first match, and a program that needs
+// `strlen` is told there is no such name.
+//
+// ⚠️ Measured 2026-08-22, this package's own conformance suite on a macOS
+// runner, one commit after the line was added:
+//
+//     ld64.lld: error: undefined symbol: strlen
+//     >>> referenced by …/xim-x-llvm/20.1.7/lib/libc++.a(stdexcept.cpp.o)
+//     ld64.lld: error: undefined symbol: dlopen
+//     ld64.lld: error: undefined symbol: __error
+//
+// The three names were all this system supplied to a build that was linking
+// against the whole of it.
+//
+// ⇒ The condition is not "which machine is this" as a preference. It is the
+// fact the stub exists for: a substitute is needed exactly where the thing it
+// substitutes for is absent, and on this system it is never absent. Where the
+// real one is present it is a SUPERSET of ours, so a program above openkal
+// links against it just as well and names the same library.
+static bool contains(const char* haystack, const char* needle) {
+    for (; *haystack; ++haystack) {
+        const char* a = haystack;
+        const char* b = needle;
+        while (*b && *a == *b) { ++a; ++b; }
+        if (!*b) return true;
+    }
+    return false;
+}
+
 int main() {
-    mcpp::link_search("port");
+    // `MCPP_HOST` is a triple; this system's spelling of it carries `macos`.
+    if (!contains(mcpp::host(), "macos"))
+        mcpp::link_search("port");
     mcpp::rerun_if_changed("port/libSystem.tbd");
     return 0;
 }
