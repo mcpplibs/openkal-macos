@@ -1,0 +1,26 @@
+import mcpp;
+
+// ⭐ WHERE THIS SYSTEM'S NAMES COME FROM, PUT ON THE CONSUMER'S LINK LINE.
+//
+// `port/libSystem.tbd` lists the whole of what a program above openkal borrows
+// from this system — two names, and a third that belongs to the object format.
+// A stub is a list of names rather than code, so linking against it is what
+// makes the program name `/usr/lib/libSystem.B.dylib` and bind to the real
+// library when it runs.
+//
+// ⚠️ IT HAS TO BE A SEARCH PATH RATHER THAN A FILE ON THE LINE, and it has to
+// come from HERE rather than from whoever is building. `link_search` reaches
+// the CONSUMER's link line — the package that knows this system is not the
+// package being built — and a relative path in `ldflags` would resolve against
+// the build directory instead of against this package.
+//
+// ⚠️ NOT CONDITIONAL ON THE HOST. Measured 2026-08-23: cross-linking for this
+// system from Linux failed with `library not found for -lSystem`, because the
+// only thing that had ever put the stub on a link line was a shell script
+// (`openkal-musl/tools/cross-build-macos.sh`) that names the file directly.
+// A build tool that resolves this package should not need that script.
+int main() {
+    mcpp::link_search("port");
+    mcpp::rerun_if_changed("port/libSystem.tbd");
+    return 0;
+}
