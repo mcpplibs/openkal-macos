@@ -1,0 +1,33 @@
+--- !tapi-tbd
+# The whole of what this system supplies to a program built above openkal.
+#
+# This implementation issues the kernel's own calls, so a program above it needs
+# nothing from this system's C library except the two names below. Neither could
+# be replaced by a system call: one arranges the state a new execution context
+# needs, which on this system is not what a kernel call does, and the other
+# reads a clock the kernel does not otherwise expose.
+#
+# The list was not read out of the sources. Every object of a complete build was
+# given to the linker without `-undefined dynamic_lookup`, and this is what
+# remained. That method also found a false positive a reading would have kept
+# --- `__DYNAMIC`, from a source this system's build excludes --- which is the
+# reason to prefer it. openkal-musl/musl/PATCHES.md records the measurement.
+#
+# A stub is a list of names, not code, so this file is a complete substitute for
+# the vendor's own stub for the purpose of linking: a program built with it
+# names /usr/lib/libSystem.B.dylib and binds to the system's real library when
+# it runs. Verified 2026-08-22 by linking 1356 objects with ld64.lld ON LINUX,
+# producing a Mach-O arm64 executable whose only dependency is that library.
+#
+# ⚠️ Linking is not running. A program for the 64-bit ARM variant of this system
+# must also be signed, if only ad hoc, before the kernel will start it. That
+# step belongs to whoever produces the artifact, and it is verified on a machine
+# of that system rather than here.
+tbd-version:     4
+targets:         [ arm64-macos, x86_64-macos ]
+install-name:    '/usr/lib/libSystem.B.dylib'
+current-version: 1351.0.0
+exports:
+  - targets:     [ arm64-macos, x86_64-macos ]
+    symbols:     [ _clock_gettime_nsec_np, _pthread_create_from_mach_thread ]
+...
