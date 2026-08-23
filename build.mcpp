@@ -74,8 +74,22 @@ int main() {
     // the only thing that can name one. When it was not — a native build, which
     // is what this package's own conformance suite does — the SDK is on the
     // link and is the complete answer.
-    const char* target = std::getenv("MCPP_TARGET");
-    if (target && *target)
+    // ⚠️ `MCPP_TARGET_REQUESTED` AND NOT `MCPP_TARGET`. The second is filled in
+    // with the host when nobody named a target, so it is never empty and the
+    // test was always true — which put this stub on a NATIVE link, where the
+    // SDK's complete one was already there and ours shadowed it:
+    //
+    //     ld64.lld: error: undefined symbol: wcslen / strtoul / __error
+    //
+    // The first is the value unfilled: empty exactly when this is an ordinary
+    // native build. See mcpp's `build_program.cppm` for why the two are
+    // different questions even when the triples are equal.
+    //
+    // ⭐ An mcpp too old to set it leaves it empty, and that is the right answer
+    // for such a build tool: it has no graph-supplied target side, so the
+    // system is always on the link.
+    const char* requested = std::getenv("MCPP_TARGET_REQUESTED");
+    if (requested && *requested)
         mcpp::link_search("port");
     mcpp::rerun_if_changed("port/libSystem.tbd");
     return 0;
