@@ -1,0 +1,96 @@
+import mcpp;
+import std;
+
+// ⭐ WHERE THIS SYSTEM'S NAMES COME FROM, PUT ON THE CONSUMER'S LINK LINE.
+//
+// `port/libSystem.tbd` lists the whole of what a program above openkal borrows
+// from this system — two names, and a third that belongs to the object format.
+// A stub is a list of names rather than code, so linking against it is what
+// makes the program name `/usr/lib/libSystem.B.dylib` and bind to the real
+// library when it runs.
+//
+// ⚠️ IT HAS TO BE A SEARCH PATH RATHER THAN A FILE ON THE LINE, and it has to
+// come from HERE rather than from whoever is building. `link_search` reaches
+// the CONSUMER's link line — the package that knows this system is not the
+// package being built — and a relative path in `ldflags` would resolve against
+// the build directory instead of against this package.
+//
+// Measured 2026-08-23: cross-linking for this system from Linux failed with
+// `library not found for -lSystem`, because the only thing that had ever put
+// the stub on a link line was a shell script
+// (`openkal-musl/tools/cross-build-macos.sh`) that names the file directly. A
+// build tool that resolves this package should not need that script.
+//
+// ⚠️⚠️ AND ONLY WHEN THIS SYSTEM'S OWN STUB IS NOT PRESENT, WHICH THE FIRST
+// VERSION OF THIS FILE GOT WRONG.
+//
+// It said "not conditional on the host" and meant it as a principle. The
+// principle was aimed at the right thing — a package should not need a shell
+// script, and a cross build should not depend on where it happens — but the
+// conclusion drawn from it was false, because this file is not the only thing
+// that can put a `libSystem` on the search path. On this system, the SDK
+// already has one, it is the vendor's, and it lists everything rather than
+// three names.
+//
+// ⇒ Adding ours ahead of it does not augment it. `-L` is searched before the
+// SDK, so `-lSystem` stops at the first match, and a program that needs
+// `strlen` is told there is no such name.
+//
+// ⚠️ Measured 2026-08-22, this package's own conformance suite on a macOS
+// runner, one commit after the line was added:
+//
+//     ld64.lld: error: undefined symbol: strlen
+//     >>> referenced by …/xim-x-llvm/20.1.7/lib/libc++.a(stdexcept.cpp.o)
+//     ld64.lld: error: undefined symbol: dlopen
+//     ld64.lld: error: undefined symbol: __error
+//
+// The three names were all this system supplied to a build that was linking
+// against the whole of it.
+//
+// ⇒ The condition is not "which machine is this" as a preference. It is the
+// fact the stub exists for: a substitute is needed exactly where the thing it
+// substitutes for is absent, and on this system it is never absent. Where the
+// real one is present it is a SUPERSET of ours, so a program above openkal
+// links against it just as well and names the same library.
+
+int main() {
+    // ⚠️⚠️ THE CONDITION IS NOT "WHICH MACHINE", AND THE FIRST TWO ATTEMPTS AT
+    // IT BOTH WERE.
+    //
+    // Attempt one supplied the stub always, and on this system it SHADOWED the
+    // vendor's — which lists every name rather than three (see above).
+    // Attempt two asked whether the host was this system, and that failed the
+    // other way: `mcpp build --target aarch64-macos` ON a Mac is a build whose
+    // target side comes from the graph, and the build tool deliberately keeps
+    // this machine's SDK off such a link. The vendor's stub was then not there
+    // either, and neither was ours:
+    //
+    //     ld64.lld: error: library not found for -lSystem
+    //     ld64.lld: error: undefined symbol: clock_gettime_nsec_np
+    //     ld64.lld: error: undefined symbol: pthread_create_from_mach_thread
+    //
+    // ⭐ The fact that decides it is whether the build was POINTED AT A TARGET.
+    // When it was, the tool supplies no system of its own and this package is
+    // the only thing that can name one. When it was not — a native build, which
+    // is what this package's own conformance suite does — the SDK is on the
+    // link and is the complete answer.
+    // ⚠️ `MCPP_TARGET_REQUESTED` AND NOT `MCPP_TARGET`. The second is filled in
+    // with the host when nobody named a target, so it is never empty and the
+    // test was always true — which put this stub on a NATIVE link, where the
+    // SDK's complete one was already there and ours shadowed it:
+    //
+    //     ld64.lld: error: undefined symbol: wcslen / strtoul / __error
+    //
+    // The first is the value unfilled: empty exactly when this is an ordinary
+    // native build. See mcpp's `build_program.cppm` for why the two are
+    // different questions even when the triples are equal.
+    //
+    // ⭐ An mcpp too old to set it leaves it empty, and that is the right answer
+    // for such a build tool: it has no graph-supplied target side, so the
+    // system is always on the link.
+    const char* requested = std::getenv("MCPP_TARGET_REQUESTED");
+    if (requested && *requested)
+        mcpp::link_search("port");
+    mcpp::rerun_if_changed("port/libSystem.tbd");
+    return 0;
+}
