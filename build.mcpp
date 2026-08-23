@@ -1,4 +1,5 @@
 import mcpp;
+import std;
 
 // ⭐ WHERE THIS SYSTEM'S NAMES COME FROM, PUT ON THE CONSUMER'S LINK LINE.
 //
@@ -51,19 +52,30 @@ import mcpp;
 // substitutes for is absent, and on this system it is never absent. Where the
 // real one is present it is a SUPERSET of ours, so a program above openkal
 // links against it just as well and names the same library.
-static bool contains(const char* haystack, const char* needle) {
-    for (; *haystack; ++haystack) {
-        const char* a = haystack;
-        const char* b = needle;
-        while (*b && *a == *b) { ++a; ++b; }
-        if (!*b) return true;
-    }
-    return false;
-}
 
 int main() {
-    // `MCPP_HOST` is a triple; this system's spelling of it carries `macos`.
-    if (!contains(mcpp::host(), "macos"))
+    // ⚠️⚠️ THE CONDITION IS NOT "WHICH MACHINE", AND THE FIRST TWO ATTEMPTS AT
+    // IT BOTH WERE.
+    //
+    // Attempt one supplied the stub always, and on this system it SHADOWED the
+    // vendor's — which lists every name rather than three (see above).
+    // Attempt two asked whether the host was this system, and that failed the
+    // other way: `mcpp build --target aarch64-macos` ON a Mac is a build whose
+    // target side comes from the graph, and the build tool deliberately keeps
+    // this machine's SDK off such a link. The vendor's stub was then not there
+    // either, and neither was ours:
+    //
+    //     ld64.lld: error: library not found for -lSystem
+    //     ld64.lld: error: undefined symbol: clock_gettime_nsec_np
+    //     ld64.lld: error: undefined symbol: pthread_create_from_mach_thread
+    //
+    // ⭐ The fact that decides it is whether the build was POINTED AT A TARGET.
+    // When it was, the tool supplies no system of its own and this package is
+    // the only thing that can name one. When it was not — a native build, which
+    // is what this package's own conformance suite does — the SDK is on the
+    // link and is the complete answer.
+    const char* target = std::getenv("MCPP_TARGET");
+    if (target && *target)
         mcpp::link_search("port");
     mcpp::rerun_if_changed("port/libSystem.tbd");
     return 0;
