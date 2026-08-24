@@ -134,6 +134,7 @@ enum : okm_long {
     nr_dup2 = 90, nr_fsync = 95, nr_gettimeofday = 116,
     nr_readv = 120, nr_writev = 121, nr_ftruncate = 201,
     nr_utimes = 138, nr_futimes = 139,
+    nr_getentropy = 500,
     // This kernel has no call that reports the working directory --- the
     // measurement is in .github/workflows/numbers.yml, where SYS___getcwd is
     // absent from the system's own table. What it has instead is an enquiry
