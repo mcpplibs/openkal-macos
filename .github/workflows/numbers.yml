@@ -42,6 +42,7 @@ jobs:
                    ftruncate truncate mmap lseek __getcwd getcwd \
                    stat stat64 fstat fstat64 lstat lstat64 \
                    fstatat fstatat64 getdirentries getdirentries64 \
+                   getentropy \
                    bsdthread_terminate thread_selfid \
                    open openat openat_nocancel renameat faccessat unlinkat \
                    readlinkat mkdirat rmdir unlink mkdir rename access \
