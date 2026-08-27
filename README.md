@@ -30,7 +30,7 @@ and each is provided in whole:
 | `openkal.datagram` | the same calls, with `SOCK_DGRAM` |
 | `openkal.timeout` | `poll`, whose bound is stated in milliseconds. `ppoll` does not exist here, so a millisecond is the granularity this implementation reports — what the environment can distinguish rather than what would be convenient |
 | `openkal.space` | the duplication primitive `openkal.process` was already built on. ⚠️ The duplicate is distinguished by the call's **second** return value: both images receive a process identifier in the first, so an implementation testing that one against zero would decide that neither image was the duplicate |
-| `openkal.exec` | a mapping obtained writable and made executable afterwards, which is the only order this system permits |
+| `openkal.exec` | a mapping obtained writable and made executable afterwards, which is the only order this system permits. ⚠️ The instruction-cache maintenance is **not** performed here: `__builtin___clear_cache` becomes a call to `___clear_cache` in the compiler's support library on `arm64`, and this implementation is reachable from a program that carries no other runtime. The specification places that maintenance upon the program |
 
 **⚠️ Clause 6.5 names this system and `openkal.exec` in terms**, and says
 availability may be settled by how the artifact is *produced* — a signed

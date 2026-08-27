@@ -29,23 +29,38 @@
 // resolution, together with whatever produces the artifact. The test is here so
 // that the question is answered by the system rather than by this comment.
 //
-// ⚠️ THE INSTRUCTION CACHE IS INVALIDATED HERE AS WELL, AND THAT DOES NOT MOVE
-// THE OBLIGATION. A processor with separate caches for data and instructions
-// has just had bytes written through the data path that it is about to fetch
-// through the instruction path, and nothing in `mprotect' makes the second path
-// see the first's writes. The specification places the maintenance upon the
-// PROGRAM --- the conformance suite performs it itself and says why: the
-// program is the party that knows which bytes it wrote --- so what happens here
-// is help rather than conformance, and a program that also does it pays for one
-// redundant sequence.
+// ⚠️⚠️ THE INSTRUCTION CACHE IS NOT INVALIDATED HERE, AND ONE VERSION OF THIS
+// FILE DID INVALIDATE IT. THE MEASUREMENT IS WHY IT DOES NOT.
 //
-// ⭐ IT IS DONE HERE AND NOT IN openkal-linux, WHICH IS AN ASYMMETRY WITH A
-// REASON RATHER THAN AN OVERSIGHT. On this system's two architectures the
-// builtin expands to nothing (x86_64) or to the maintenance sequence inline
-// (aarch64), so it costs nothing to link. On riscv64 it becomes a CALL into the
-// compiler's support library, and openkal-linux declines to acquire that
-// dependency for an operation the specification does not require of it.
-// openkal-linux/src/exec.cpp records the same reasoning from the other side.
+// A processor with separate caches for data and instructions has just had bytes
+// written through the data path that it is about to fetch through the
+// instruction path, and nothing in `mprotect' makes the second path see the
+// first's writes. So `__builtin___clear_cache' looked like the right thing to
+// add, on the reading that it expands to nothing on x86_64 and to the
+// maintenance sequence INLINE on aarch64.
+//
+// ⚠️ The second half of that reading was false, and this package's own
+// independence check said so within the hour:
+//
+//     target/aarch64-macos/…/obj/exec.o references a symbol it must not:
+//     ___clear_cache
+//
+// The builtin becomes a CALL into the compiler's support library on this
+// architecture, exactly as it does on riscv64. This implementation is reachable
+// from a program that carries no other runtime and the check exists to keep it
+// that way, so acquiring that dependency is not available here.
+//
+// ⭐ THE SPECIFICATION PLACES THE MAINTENANCE UPON THE PROGRAM in any case --- the
+// conformance suite performs it itself and says why: the program is the party
+// that knows which bytes it wrote. So nothing is lost by not doing it, and what
+// the three implementations now share is a rule rather than an accident:
+//
+//     an implementation performs the maintenance where its environment offers
+//     it as a CALL of the environment's own (openkal-windows has
+//     `FlushInstructionCache'), and does not where the only means is a compiler
+//     builtin that becomes a dependency upon the compiler's support library.
+//
+// openkal-linux/src/exec.cpp records the same rule from the other side.
 
 namespace {
 
@@ -79,9 +94,6 @@ int kal_exec_publish(void* p, kal_uintptr size) {
                                 static_cast<okm_long>(bytes),
                                 okm::prot_read | okm::prot_exec);
     if (okm::failed(r)) return okm::translate(r);
-
-    auto* begin = static_cast<char*>(p);
-    __builtin___clear_cache(begin, begin + bytes);
     return kal_ok;
 }
 
