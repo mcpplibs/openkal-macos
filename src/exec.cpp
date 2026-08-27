@@ -20,14 +20,24 @@
 // SAME TIME --- `MAP_JIT' and the pair of calls that flip one region between
 // the two. It is not what a program needs to obtain memory that is writable,
 // then made executable and no longer writable, which is the whole of what this
-// interface offers. tests/conformance_exec.cpp is where that distinction stops
-// being an argument: it reserves a region, writes an instruction sequence into
-// it, publishes it, CALLS it, and compares what it returned.
+// interface offers.
 //
-// ⇒ If that test fails on this system, the reading above is wrong and the
+// ⭐ THE SPECIFICATION'S OWN SUITE IS WHERE THAT DISTINCTION STOPS BEING AN
+// ARGUMENT --- `conformance/src/sections/exec.cpp' in the openkal repository,
+// which this package runs through `run-conformance.sh openkal-macos .
+// full,optional'. It reserves a region, writes an instruction sequence into it,
+// publishes it, CALLS it, and compares what it returned.
+//
+// ⚠️ An earlier version of this comment named `tests/conformance_exec.cpp',
+// which is in this repository and does not exist. A comment naming the place a
+// question is answered is a promise, and one pointing at nothing sends a reader
+// to look and leaves them unable to tell whether the check is missing or the
+// reference is.
+//
+// ⇒ If that section fails on this system, the reading above is wrong and the
 // remedy is clause 6.5's: a feature of this package, provided at dependency
-// resolution, together with whatever produces the artifact. The test is here so
-// that the question is answered by the system rather than by this comment.
+// resolution, together with whatever produces the artifact. The question is
+// answered by the system rather than by this comment.
 //
 // ⚠️⚠️ THE INSTRUCTION CACHE IS NOT INVALIDATED HERE, AND ONE VERSION OF THIS
 // FILE DID INVALIDATE IT. THE MEASUREMENT IS WHY IT DOES NOT.
