@@ -35,11 +35,17 @@
 // through the instruction path, and nothing in `mprotect' makes the second path
 // see the first's writes. The specification places the maintenance upon the
 // PROGRAM --- the conformance suite performs it itself and says why: the
-// program is the party that knows which bytes it wrote --- and this
-// implementation performs it too, over the region whose protection it just
-// changed. A program that also does it pays for one redundant sequence; a
-// program that does not is not silently wrong on one of this system's two
-// architectures. On x86_64 the builtin expands to nothing.
+// program is the party that knows which bytes it wrote --- so what happens here
+// is help rather than conformance, and a program that also does it pays for one
+// redundant sequence.
+//
+// ⭐ IT IS DONE HERE AND NOT IN openkal-linux, WHICH IS AN ASYMMETRY WITH A
+// REASON RATHER THAN AN OVERSIGHT. On this system's two architectures the
+// builtin expands to nothing (x86_64) or to the maintenance sequence inline
+// (aarch64), so it costs nothing to link. On riscv64 it becomes a CALL into the
+// compiler's support library, and openkal-linux declines to acquire that
+// dependency for an operation the specification does not require of it.
+// openkal-linux/src/exec.cpp records the same reasoning from the other side.
 
 namespace {
 
