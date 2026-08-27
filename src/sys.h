@@ -162,7 +162,6 @@ enum : okm_long {
     nr_chdir = 12, nr_getpid = 20, nr_getuid = 24, nr_geteuid = 25,
     nr_kill = 37, nr_dup = 41, nr_getegid = 43, nr_getgid = 47,
     nr_ioctl = 54, nr_execve = 59, nr_umask = 60, nr_pipe = 42,
-    nr_fcntl = 92,
     nr_munmap = 73, nr_mprotect = 74, nr_madvise = 75,
     nr_dup2 = 90, nr_fsync = 95, nr_gettimeofday = 116,
     nr_readv = 120, nr_writev = 121, nr_ftruncate = 201,
