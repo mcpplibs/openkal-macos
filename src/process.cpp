@@ -108,6 +108,111 @@ int kal_process_spawn(kal_dir base,
     return kal_ok;
 }
 
+// A channel: a pair of streams of which one end is meant to cross a spawn.
+//
+// This kernel's `pipe' reports BOTH descriptors as return values rather than
+// through a buffer, which is a property of its calling convention and not of the
+// call: the second value comes back in the second register. src/sys.h says the
+// same thing about the duplication primitive, and for the same reason.
+//
+// THERE IS NO pipe2 HERE, so close-on-exec is set afterwards with fcntl. Doing
+// it in two steps is not equivalent under a concurrent spawn --- another context
+// starting a program between the two would inherit the descriptors --- and this
+// implementation states that rather than concealing it. A caller that spawns
+// from one context, which is what a program using this operation does, is not
+// affected.
+int kal_process_channel(kal_stream* mine, kal_stream* theirs) {
+    if (mine == nullptr || theirs == nullptr) return kal_err_invalid;
+
+    okm_long second = 0;
+    const okm_long first = okm::pipe_pair(second);
+    if (okm::failed(first)) return okm::translate(first);
+
+    constexpr okm_long f_setfd = 2, fd_cloexec = 1;
+    okm::sys(okm::nr_fcntl, first,  f_setfd, fd_cloexec);
+    okm::sys(okm::nr_fcntl, second, f_setfd, fd_cloexec);
+
+    // Bare descriptors, because openkal.stream's transfer operations take what
+    // this kernel takes. kal_fs_stream reports a file's stream the same way.
+    *mine   = kal_stream{ static_cast<kal_uintptr>(first)  };   // the reading end
+    *theirs = kal_stream{ static_cast<kal_uintptr>(second) };   // the writing end
+    return kal_ok;
+}
+
+void kal_process_channel_close(kal_stream s) {
+    // The standard streams are borrowed and are numbered 0, 1 and 2; closing one
+    // of those through this operation would take a stream away from the whole
+    // program.
+    const okm_long fd = static_cast<okm_long>(s.h);
+    if (fd < 3) return;
+    okm::sys(okm::nr_close, fd);
+}
+
+// Starting a program that receives exactly the directories named.
+//
+// The grants are placed as descriptors three and upward, which is where
+// kal_fs_preopen reads them back from. The inverse relationship clause 7.11
+// describes is between those two operations, which is why they must agree about
+// the numbering rather than each choosing one.
+int kal_process_spawn_with(kal_dir base,
+                           const char* path, kal_uintptr path_len,
+                           const char** argv, const kal_uintptr* argv_lens, kal_uintptr argc,
+                           const char** envp, const kal_uintptr* envp_lens, kal_uintptr envc,
+                           const kal_spawn_streams* streams,
+                           const kal_preopen* grants, kal_uintptr grant_count,
+                           kal_process* out) {
+    const int b = okm::unpack(base.h);
+    if (b < 0 || out == nullptr) return kal_err_invalid;
+    if (!okm::acceptable(path, path_len)) return kal_err_invalid;
+    if (grant_count > 0 && grants == nullptr) return kal_err_invalid;
+    okm::terminated p(path, path_len);
+    if (!p.ok) return kal_err_invalid;
+
+    vector args, envs;
+    if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
+    if (!envs.build(envp, envp_lens, envc)) return kal_err_no_memory;
+
+    // Resolved before the duplication, because a failure after it would leave a
+    // child to be reaped and a caller holding an error it cannot act upon.
+    constexpr kal_uintptr max_grants = 16;
+    if (grant_count > max_grants) return kal_err_invalid;
+    int granted[max_grants];
+    for (kal_uintptr i = 0; i < grant_count; ++i) {
+        granted[i] = okm::unpack(grants[i].dir.h);
+        if (granted[i] < 0) return kal_err_invalid;
+    }
+
+    const okm_long in = streams ? static_cast<okm_long>(streams->in)  : 0;
+    const okm_long ou = streams ? static_cast<okm_long>(streams->out) : 0;
+    const okm_long er = streams ? static_cast<okm_long>(streams->err) : 0;
+
+    bool is_duplicate = false;
+    const okm_long child = okm::duplicate(is_duplicate);
+    if (okm::failed(child)) return okm::translate(child);
+
+    if (is_duplicate) {
+        if (in != 0) okm::sys(okm::nr_dup2, in, 0);
+        if (ou != 0) okm::sys(okm::nr_dup2, ou, 1);
+        if (er != 0) okm::sys(okm::nr_dup2, er, 2);
+
+        // dup2 onto the same number succeeds and does nothing, unlike dup3,
+        // which refuses. Either behaviour is right for this loop; only the
+        // reason differs, and it is stated so that a reader comparing the two
+        // implementations does not take one of them for an oversight.
+        for (kal_uintptr i = 0; i < grant_count; ++i)
+            okm::sys(okm::nr_dup2, granted[i], static_cast<okm_long>(3 + i));
+
+        okm::sys(nr_fchdir, b);
+        okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(p.buf),
+                 reinterpret_cast<okm_long>(args.slots),
+                 reinterpret_cast<okm_long>(envs.slots));
+        for (;;) okm::sys(okm::nr_exit, 127);
+    }
+
+    *out = kal_process{ static_cast<kal_uintptr>(child) };
+    return kal_ok;
+}
+
 int kal_process_wait(kal_process h, int* status, int* terminated_by_environment) {
     if (h.h == 0) return kal_err_invalid;
     int st = 0;
@@ -144,6 +249,7 @@ void kal_process_close(kal_process) { }
 
 const kal_uintptr kal_process_props =
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
-  | KAL_PROCESS_PROP_EXIT_STATUS;
+  | KAL_PROCESS_PROP_EXIT_STATUS
+  | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR;
 
 }

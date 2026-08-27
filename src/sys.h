@@ -122,6 +122,38 @@ inline okm_long duplicate(bool& is_duplicate) {
 #endif
 }
 
+// Creating a pipe, which is the second call whose result does not fit the
+// convention above and does so for the same reason as the first.
+//
+// This kernel reports BOTH descriptors as return values: the reading end in the
+// first register and the writing end in the second. The other kernel takes a
+// buffer and fills it. Neither is more natural; what matters is that this file
+// meets the difference rather than hiding it, as it does for the duplication
+// primitive above.
+inline okm_long pipe_pair(okm_long& writing) {
+#if defined(__aarch64__)
+    register okm_long x16 __asm__("x16") = 42;   // pipe
+    register okm_long x0 __asm__("x0") = 0;
+    register okm_long x1 __asm__("x1") = 0;
+    okm_long failed;
+    __asm__ __volatile__("svc #0x80\n\tcset %2, cs"
+                         : "+r"(x0), "+r"(x1), "=r"(failed)
+                         : "r"(x16)
+                         : "memory", "cc");
+    writing = x1;
+    return failed ? -x0 : x0;
+#else
+    okm_long first, second;
+    unsigned char failed;
+    __asm__ __volatile__("syscall"
+                         : "=a"(first), "=d"(second), "=@ccc"(failed)
+                         : "a"(42L | 0x2000000L)
+                         : "rcx", "r11", "memory", "cc");
+    writing = second;
+    return failed ? -first : first;
+#endif
+}
+
 // The numbers. They are the same on both architectures this implementation
 // supports, which is the reason the table is not per-architecture as it is on
 // the other kernel.
@@ -129,7 +161,8 @@ enum : okm_long {
     nr_exit = 1, nr_read = 3, nr_write = 4, nr_close = 6, nr_wait4 = 7,
     nr_chdir = 12, nr_getpid = 20, nr_getuid = 24, nr_geteuid = 25,
     nr_kill = 37, nr_dup = 41, nr_getegid = 43, nr_getgid = 47,
-    nr_ioctl = 54, nr_execve = 59, nr_umask = 60,
+    nr_ioctl = 54, nr_execve = 59, nr_umask = 60, nr_pipe = 42,
+    nr_fcntl = 92,
     nr_munmap = 73, nr_mprotect = 74, nr_madvise = 75,
     nr_dup2 = 90, nr_fsync = 95, nr_gettimeofday = 116,
     nr_readv = 120, nr_writev = 121, nr_ftruncate = 201,
