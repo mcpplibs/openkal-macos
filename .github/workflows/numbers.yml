@@ -49,7 +49,11 @@ jobs:
                    ulock_wait ulock_wake __ulock_wait __ulock_wake \
                    futimens utimensat futimes utimes settimeofday \
                    fchmod fchmodat fcntl \
-                   pipe sigaction; do
+                   pipe sigaction \
+                   socket connect accept accept_nocancel bind listen shutdown \
+                   getsockname getpeername setsockopt getsockopt \
+                   sendto recvfrom sendmsg recvmsg socketpair \
+                   poll select pselect kevent; do
             printf '%-24s' "$n"
             grep -E "^#define[[:space:]]+SYS_${n}[[:space:]]" "$h" | head -1 || echo '(absent)'
           done
@@ -138,6 +142,21 @@ jobs:
             { "mkdirat",        475,   -2, 0, 0, 0 },
             { "ulock_wait",     515,    0, 0, 0, 0 },
             { "ulock_wake",     516,    0, 0, 0, 0 },
+            /* The socket calls, with a descriptor that cannot be one. */
+            { "recvfrom",        29,   -1, 0, 0, 0 },
+            { "accept",          30,   -1, 0, 0, 0 },
+            { "getpeername",     31,   -1, 0, 0, 0 },
+            { "getsockname",     32,   -1, 0, 0, 0 },
+            { "select",          93,    0, 0, 0, 0 },
+            { "socket",          97,    0, 0, 0, 0 },
+            { "connect",         98,   -1, 0, 0, 0 },
+            { "bind",           104,   -1, 0, 0, 0 },
+            { "setsockopt",     105,   -1, 0, 0, 0 },
+            { "listen",         106,   -1, 0, 0, 0 },
+            { "getsockopt",     118,   -1, 0, 0, 0 },
+            { "sendto",         133,   -1, 0, 0, 0 },
+            { "shutdown",       134,   -1, 0, 0, 0 },
+            { "poll",           230,    0, 0, 0, 0 },
           };
 
           int main(void) {

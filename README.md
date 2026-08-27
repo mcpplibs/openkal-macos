@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.5.1"
+openkal = "0.8.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.3.1"
+openkal-macos = "0.5.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -18,8 +18,30 @@ different system is what turns the claim into an observation.
 
 ## Interfaces provided
 
-All eight. `tools/check-surface.sh --complete` in the specification package
+All fifteen. `tools/check-surface.sh --complete` in the specification package
 compares the exported names against `SURFACE.txt`.
+
+The five that openkal 0.8 added were declined by this implementation until now,
+and each is provided in whole:
+
+| | on this system |
+| --- | --- |
+| `openkal.net` | the kernel's own socket calls. There is no `accept4` and no flag upon `socket` that closes a descriptor across a spawn, so close-on-exec is set afterwards with `fcntl` |
+| `openkal.datagram` | the same calls, with `SOCK_DGRAM` |
+| `openkal.timeout` | `poll`, whose bound is stated in milliseconds. `ppoll` does not exist here, so a millisecond is the granularity this implementation reports — what the environment can distinguish rather than what would be convenient |
+| `openkal.space` | the duplication primitive `openkal.process` was already built on. ⚠️ The duplicate is distinguished by the call's **second** return value: both images receive a process identifier in the first, so an implementation testing that one against zero would decide that neither image was the duplicate |
+| `openkal.exec` | a mapping obtained writable and made executable afterwards, which is the only order this system permits. ⚠️ The instruction-cache maintenance is **not** performed here: `__builtin___clear_cache` becomes a call to `___clear_cache` in the compiler's support library on `arm64`, and this implementation is reachable from a program that carries no other runtime. The specification places that maintenance upon the program |
+
+**⚠️ Clause 6.5 names this system and `openkal.exec` in terms**, and says
+availability may be settled by how the artifact is *produced* — a signed
+declaration applied after the link. That clause is about memory which is
+writable and executable **at the same time**, which is not what this interface
+offers: a region here is writable, then published, then executable, and never
+both. The conformance suite reserves a region, writes an instruction sequence
+into it, publishes it, **calls it**, and compares what it returned — so the
+reading is settled by the system rather than by this paragraph. If that
+observation stops holding, the remedy is clause 6.5's: a feature of this
+package, provided at dependency resolution.
 
 The package exports no module: the interface belongs to the specification, and
 this package supplies definitions.
@@ -118,7 +140,7 @@ rather than the specification.
 
 ```bash
 git clone https://github.com/mcpplibs/openkal .spec
-bash .spec/tools/run-conformance.sh openkal-macos . full
+bash .spec/tools/run-conformance.sh openkal-macos . full,optional
 ```
 
 ## Architectures

@@ -180,7 +180,7 @@ jobs:
 
       - name: Every interface, every kind of examination
         run: |
-          bash .spec/tools/run-conformance.sh openkal-macos . full
+          bash .spec/tools/run-conformance.sh openkal-macos . full,optional
 
       # The other architecture, as far as this system allows it to be reached.
       #
