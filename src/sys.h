@@ -181,7 +181,67 @@ enum : okm_long {
     nr_fstatat64 = 470, nr_unlinkat = 472, nr_readlinkat = 473,
     nr_mkdirat = 475,
     nr_ulock_wait = 515, nr_ulock_wake = 516,
+
+    // The socket calls, and the one that reports readiness.
+    //
+    // ⚠️ THEY ARE THE ORIGINAL BSD NUMBERS AND THEY ARE LOW, which is worth
+    // stating because the numbering here is not the other kernel's in any
+    // respect: `accept' is 30 there and 288 here, and a table copied from the
+    // wrong system produces a signal named "bad system call" rather than a
+    // failed call. .github/workflows/numbers.yml reads them from the system's
+    // own header on both architectures.
+    //
+    // ⭐ THERE IS NO `accept4' AND NO `pipe2' ON THIS SYSTEM, so close-on-exec
+    // is set after the fact with `fcntl'. process.cpp already records what that
+    // costs and why a program using these operations from one context is not
+    // affected by it.
+    nr_recvfrom = 29, nr_accept = 30, nr_getpeername = 31, nr_getsockname = 32,
+    nr_select = 93, nr_socket = 97, nr_connect = 98,
+    nr_bind = 104, nr_setsockopt = 105, nr_listen = 106,
+    nr_getsockopt = 118, nr_sendto = 133, nr_shutdown = 134,
+    nr_poll = 230,
 };
+
+// --- the network's own constants ---------------------------------------------
+//
+// ⚠️ TWO OF THESE DIFFER FROM THE OTHER KERNEL'S AND WOULD NOT ANNOUNCE IT.
+// `AF_INET6' is 30 here and 10 there, and `SOL_SOCKET' is 0xffff here and 1
+// there. A value taken from the wrong system produces a call that fails with
+// an ordinary error, which reads as a defect in the caller.
+enum : okm_long {
+    af_inet = 2, af_inet6 = 30,
+    sock_stream = 1, sock_dgram = 2,
+    ipproto_tcp = 6, ipproto_udp = 17,
+    sol_socket = 0xffff, so_reuseaddr = 0x0004,
+    f_setfd = 2, fd_cloexec = 1,
+    poll_in = 0x0001, poll_out = 0x0004,
+    wnohang = 1,
+};
+
+// This kernel's socket addresses. ⚠️ THE FIRST BYTE IS A LENGTH, which the
+// other kernel's layout does not have: there the family occupies two bytes and
+// here it occupies the second byte alone. A structure copied from that system
+// puts the family where this one reads a length.
+struct ksockaddr_in {
+    unsigned char len;
+    unsigned char family;
+    unsigned short port;        // network order
+    okm_u32 addr;               // network order
+    unsigned char zero[8];
+};
+
+struct ksockaddr_in6 {
+    unsigned char len;
+    unsigned char family;
+    unsigned short port;        // network order
+    okm_u32 flowinfo;
+    unsigned char addr[16];
+    okm_u32 scope_id;
+};
+
+struct ksockaddr_storage { unsigned char pad[128]; };
+
+struct kpollfd { int fd; short events; short revents; };
 
 // --- error values, as this kernel returns them -------------------------------
 enum : int {
@@ -203,7 +263,7 @@ enum : okm_long {
     o_creat = 0x0200, o_excl = 0x0800, o_trunc = 0x0400, o_append = 0x0008,
     o_directory = 0x100000, o_cloexec = 0x1000000, o_nofollow = 0x0100,
     at_fdcwd = -2, at_removedir = 0x0080, at_symlink_nofollow = 0x0020,
-    prot_read = 1, prot_write = 2,
+    prot_read = 1, prot_write = 2, prot_exec = 4,
     map_private = 2, map_anon = 0x1000,
 };
 
