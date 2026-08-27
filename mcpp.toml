@@ -18,7 +18,7 @@ authors     = ["mcpplibs"]
 repo        = "https://github.com/mcpplibs/openkal-macos"
 
 [dependencies]
-openkal = { git = "https://github.com/mcpplibs/openkal", branch = "feat/openkal-0.8" }
+openkal = "0.8.0"
 
 [build]
 # The flags are attached to this package's own sources rather than to the whole
