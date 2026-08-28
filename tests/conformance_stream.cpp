@@ -33,13 +33,16 @@ int main() {
     // specification excludes a successful partial transfer, so a conforming
     // result reports either the full count or a non-zero error.
     const char msg[] = "openkal-linux: conformance\n";
-    const auto r = kal::write(kal::out(), msg, sizeof(msg) - 1);
-    check(r.e == kal_ok, "write reports success");
-    check(r.n == sizeof(msg) - 1, "write transfers the whole buffer");
+    // ⭐ ONE SIGNED WORD: the count, or the negated condition when no byte
+    // moved. A caller never inspects two things to learn one thing.
+    const kal_intptr r = kal::write(kal::out(), msg, sizeof(msg) - 1);
+    check(r >= 0, "write reports success");
+    check(r == static_cast<kal_intptr>(sizeof(msg) - 1),
+          "write transfers the whole buffer");
 
     // An invalid handle is reported rather than accepted.
-    const auto bad = kal::write(kal::stream{ 0x7fffffff }, msg, 1);
-    check(bad.e != kal_ok, "an invalid handle is rejected");
+    const kal_intptr bad = kal::write(kal::stream{ 0x7fffffff }, msg, 1);
+    check(bad < 0, "an invalid handle is rejected");
 
     // Flushing an unbuffered stream succeeds.
     check(kal::flush(kal::out()) == kal_ok, "flush succeeds");
