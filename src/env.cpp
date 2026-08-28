@@ -27,46 +27,56 @@ extern "C" {
 
 kal_uintptr kal_env_arg_count(void) { return static_cast<kal_uintptr>(okm::g_argc); }
 
-const char* kal_env_arg(kal_uintptr index, kal_uintptr* len) {
-    if (index >= static_cast<kal_uintptr>(okm::g_argc)) { if (len) *len = 0; return nullptr; }
+// EVERY VALUE IS COPIED INTO THE CALLER'S BUFFER. These answered with a pointer
+// into this implementation's own storage, which is meaningful only while the
+// implementation shares the caller's address space. Each reports the length the
+// value HAS, so a caller with a large enough buffer is done in one call and one
+// that wants to size first passes a capacity of zero.
+namespace {
+kal_intptr give(const char* v, kal_uintptr n, char* out, kal_uintptr cap) {
+    if (out != nullptr && cap != 0) okm::copy(out, v, n < cap ? n : cap);
+    return static_cast<kal_intptr>(n);
+}
+}  // namespace
+
+kal_intptr kal_env_arg(kal_uintptr index, char* out, kal_uintptr cap) {
+    if (index >= static_cast<kal_uintptr>(okm::g_argc)) return -kal_err_not_found;
     const char* s = okm::g_argv[index];
-    if (len) *len = okm::length(s);
-    return s;
+    return give(s, okm::length(s), out, cap);
 }
 
-const char* kal_env_var(const char* name, kal_uintptr name_len, kal_uintptr* value_len) {
+kal_intptr kal_env_var(const char* name, kal_uintptr name_len,
+                       char* out, kal_uintptr cap) {
+    if (name == nullptr) return -kal_err_invalid;
     for (char** e = okm::g_envp; e && *e; ++e) {
         const char* entry = *e;
         kal_uintptr i = 0;
         while (i < name_len && entry[i] != '\0' && entry[i] == name[i]) ++i;
         if (i == name_len && entry[i] == '=') {
             const char* v = entry + name_len + 1;
-            if (value_len) *value_len = okm::length(v);
-            return v;
+            return give(v, okm::length(v), out, cap);
         }
     }
-    if (value_len) *value_len = 0;
-    return nullptr;
+    // A name that is not there is distinct from one whose value is empty.
+    return -kal_err_not_found;
 }
 
 kal_uintptr kal_env_var_count(void) {
     kal_uintptr n = 0; for (char** e = okm::g_envp; e && *e; ++e) ++n; return n;
 }
 
-const char* kal_env_var_at(kal_uintptr index, kal_uintptr* name_len,
-                           const char** value, kal_uintptr* value_len) {
+// The NAME at a position. The value is then obtained by kal_env_var: an
+// operation answering both needs two buffers, two capacities and two lengths,
+// and its second half is kal_env_var written again.
+kal_intptr kal_env_var_at(kal_uintptr index, char* out, kal_uintptr cap) {
     kal_uintptr n = 0;
     for (char** e = okm::g_envp; e && *e; ++e, ++n) {
         if (n != index) continue;
         const char* entry = *e;
         kal_uintptr i = 0; while (entry[i] != '\0' && entry[i] != '=') ++i;
-        if (name_len) *name_len = i;
-        const char* v = entry[i] == '=' ? entry + i + 1 : entry + i;
-        if (value)     *value = v;
-        if (value_len) *value_len = okm::length(v);
-        return entry;
+        return give(entry, i, out, cap);
     }
-    return nullptr;
+    return -kal_err_not_found;
 }
 
 }

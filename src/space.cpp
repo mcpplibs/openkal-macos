@@ -62,7 +62,7 @@ int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
 // already reported success. An implementation cannot undefer that, and stating
 // it is what lets a program that cannot tolerate it know which environment it
 // is in.
-const kal_uintptr kal_space_props =
-    KAL_SPACE_PROP_CLONE_HANDLES | KAL_SPACE_PROP_DEFERRED_COPY;
+kal_uintptr kal_space_props(void) { return
+    KAL_SPACE_PROP_CLONE_HANDLES | KAL_SPACE_PROP_DEFERRED_COPY; }
 
 }  // extern "C"

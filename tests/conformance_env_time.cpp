@@ -20,16 +20,19 @@ int main() {
     // A program always receives the name it was started with, even where the
     // environment has none, in which case it is empty rather than absent.
     check(kal::env::arg_count() >= 1, "at least the program name is present");
-    kal_uintptr n = 0;
-    check(kal::env::arg(0, &n) != nullptr, "argument zero is readable");
+    // ⭐ THE VALUE IS COPIED AND THE LENGTH REPORTED IS THE VALUE'S OWN, so a
+    // capacity of zero asks for the length without writing.
+    char buf[1024];
+    check(kal::env::arg(0, buf, sizeof buf) >= 0, "argument zero is readable");
+    check(kal::env::arg(0, nullptr, 0) == kal::env::arg(0, buf, sizeof buf),
+          "a capacity of zero reports the same length as a copy");
 
     // A variable that is certain to exist under the harness, and one that is
     // certain not to. Both halves are asserted, because a lookup that always
     // succeeded and one that always failed would each satisfy only one.
-    kal_uintptr vlen = 0;
-    const char* path = kal::env::var("PATH", 4, &vlen);
-    check(path != nullptr && vlen > 0, "an existing variable is found");
-    check(kal::env::var("OPENKAL_ABSENT_VARIABLE", 23, &vlen) == nullptr,
+    check(kal::env::var("PATH", 4, buf, sizeof buf) > 0, "an existing variable is found");
+    check(kal::env::var("OPENKAL_ABSENT_VARIABLE", 23, buf, sizeof buf)
+              == -kal_err_not_found,
           "an absent variable is reported absent");
     check(kal_env_var_count() > 0, "the set can be enumerated");
 

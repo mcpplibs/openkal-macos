@@ -7,7 +7,8 @@ kal_stream kal_stdin (void) { return kal_stream{0}; }
 kal_stream kal_stdout(void) { return kal_stream{1}; }
 kal_stream kal_stderr(void) { return kal_stream{2}; }
 
-kal_io_result kal_stream_write(kal_stream s, const void* buf, kal_uintptr len) {
+// ONE SIGNED WORD: the count, or the negated condition when no byte moved.
+kal_intptr kal_stream_write(kal_stream s, const void* buf, kal_uintptr len) {
     const auto* p = static_cast<const unsigned char*>(buf);
     kal_uintptr done = 0;
     while (done < len) {
@@ -20,23 +21,26 @@ kal_io_result kal_stream_write(kal_stream s, const void* buf, kal_uintptr len) {
         // reports it produces short writes on any system that delivers
         // signals --- a failure a test suite is unlikely to reproduce.
         if (okm::interrupted(r)) continue;
-        if (okm::failed(r)) return { done, okm::translate(r) };
+        if (okm::failed(r)) {
+            if (done != 0) return static_cast<kal_intptr>(done);
+            return -okm::translate(r);
+        }
         if (r == 0) break;
         done += static_cast<kal_uintptr>(r);
     }
-    return { done, done == len ? kal_ok : kal_err_io };
+    return static_cast<kal_intptr>(done);
 }
 
-kal_io_result kal_stream_read(kal_stream s, void* buf, kal_uintptr len) {
+kal_intptr kal_stream_read(kal_stream s, void* buf, kal_uintptr len) {
     for (;;) {
         const okm_long r = okm::sys(okm::nr_read, static_cast<okm_long>(s.h),
                                     reinterpret_cast<okm_long>(buf),
                                     static_cast<okm_long>(len));
         if (okm::interrupted(r)) continue;
-        if (okm::failed(r)) return { 0, okm::translate(r) };
+        if (okm::failed(r)) return -okm::translate(r);
         // A short read is reported as it occurred. Unlike a short write it
         // carries information the caller requires: zero denotes end of input.
-        return { static_cast<kal_uintptr>(r), kal_ok };
+        return static_cast<kal_intptr>(r);
     }
 }
 

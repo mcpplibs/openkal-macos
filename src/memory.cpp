@@ -21,7 +21,41 @@
 namespace {
 
 
-constexpr okm_uptr kPage      = 4096;
+// ⚠️⚠️ THE PAGE IS ASKED FOR, NOT ASSUMED. It was the constant 4096, and this
+// system's own hardware has two page sizes: four kilobytes on one architecture
+// and SIXTEEN on the other. A mapping rounded to four kilobytes on a machine
+// whose page is sixteen is rounded up again by the kernel --- so allocation
+// appeared to work --- while `kal_free' unmapped a range SHORTER than the one
+// that was mapped, and the remainder was never returned.
+//
+// It is asked once. The value cannot change while the program runs, and the
+// enquiry is a system call this allocator is otherwise not on the path of.
+okm_uptr page_size() {
+    static okm_uptr cached = 0;
+    if (cached != 0) return cached;
+
+    // hw.pagesize, by the numeric name the kernel takes: { CTL_HW, HW_PAGESIZE }.
+    int      mib[2] = { 6, 7 };
+    okm_u32  value  = 0;
+    okm_uptr length = sizeof value;
+    const okm_long r = okm::sys(okm::nr_sysctl,
+                                reinterpret_cast<okm_long>(mib), 2,
+                                reinterpret_cast<okm_long>(&value),
+                                reinterpret_cast<okm_long>(&length), 0, 0);
+    // The fallback is the architecture's own page rather than a number that is
+    // right on one of the two: a value smaller than the truth is what the
+    // defect above was made of.
+    if (okm::failed(r) || value == 0) {
+#if defined(__aarch64__)
+        cached = 16384;
+#else
+        cached = 4096;
+#endif
+    } else {
+        cached = static_cast<okm_uptr>(value);
+    }
+    return cached;
+}
 constexpr okm_uptr kMinBlock  = 16;
 constexpr okm_uptr kMaxSmall  = 32768;
 constexpr okm_uptr kChunk     = 1u << 20;
@@ -98,8 +132,9 @@ void* kal_alloc(kal_uintptr size, kal_uintptr align) {
         return b;
     }
 
-    const okm_uptr bytes = round_up(size, kPage);
-    if (align <= kPage) return map(bytes);
+    const okm_uptr page = page_size();
+    const okm_uptr bytes = round_up(size, page);
+    if (align <= page) return map(bytes);
 
     // An alignment wider than a page is satisfied by mapping more and
     // recording, immediately before the region returned, what must be
@@ -135,12 +170,22 @@ void kal_free(void* p, kal_uintptr size, kal_uintptr align) {
         return;
     }
 
-    if (align <= kPage) { unmap(p, round_up(size, kPage)); return; }
+    if (const okm_uptr page = page_size(); align <= page) {
+        unmap(p, round_up(size, page)); return;
+    }
 
     auto* user = static_cast<unsigned char*>(p);
     const okm_uptr total = reinterpret_cast<okm_uptr*>(user)[-1];
     auto*  base = reinterpret_cast<void*>(reinterpret_cast<okm_uptr*>(user)[-2]);
     unmap(base, total);
+}
+
+
+// The quantum this environment allocates and protects memory in. This kernel
+// allocates and protects in the same unit, so the coarsest of the two is that
+// unit; a caller that rounds to it is never wrong.
+kal_uintptr kal_memory_granularity(void) {
+    return static_cast<kal_uintptr>(page_size());
 }
 
 }

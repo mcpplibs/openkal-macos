@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.8.0"
+openkal = "0.9.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.5.0"
+openkal-macos = "0.6.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include <openkal/exec.h>
+#include <openkal/memory.h>
 
 // openkal.exec on this system.
 //
@@ -74,14 +75,70 @@
 
 namespace {
 
-constexpr okm_uptr kPage = 4096;
-
-// ⚠️ THE PAGE IS 16384 BYTES ON ONE OF THIS SYSTEM'S TWO ARCHITECTURES. Rounding
-// to the smaller number is still correct --- the kernel rounds up to its own
-// granularity, and a region reserved as 4096 occupies a whole page of whatever
-// size --- but a caller freeing with the size it reserved must reach the same
-// number, which it does because both go through the same rounding.
+// ⚠️ THE GRANULARITY IS ASKED FOR RATHER THAN ASSUMED. This file held
+// `constexpr okm_uptr kPage = 4096' and a comment arguing that rounding to the
+// smaller of this system's two page sizes was still correct because the kernel
+// rounds up. The argument holds for the reservation and fails for the release:
+// `munmap' with a length shorter than the mapping unmaps less than was mapped.
+// It is the same defect `src/memory.cpp' records having measured, in the same
+// system, one file away --- so the number now comes from the one operation
+// that answers it.
 okm_uptr round_up(okm_uptr n, okm_uptr to) { return (n + to - 1) & ~(to - 1); }
+
+okm_uptr granularity() {
+    return static_cast<okm_uptr>(kal_memory_granularity());
+}
+
+// ⭐⭐ WHETHER THIS SYSTEM GRANTS EXECUTABLE MEMORY IS MEASURED, NOT ARGUED.
+//
+// This file previously carried both answers. One comment reasoned that the
+// write-then-publish order is the case an entitlement is NOT needed for and
+// concluded the interface is provided unconditionally; another, thirty lines
+// below it, reasoned that executable memory is granted only to an artifact
+// produced with an entitlement and returned zero. The operations behaved as
+// the first said and the capability word said the second.
+//
+// ⚠️ AND THE DISAGREEMENT WAS INVISIBLE UNTIL A CONSUMER COULD READ THE WORD.
+// A statically-linked caller never asked: it linked the operations and used
+// them. The word became load-bearing when the specification made an
+// implementation's own account of itself part of the ABI, and the conformance
+// suite then reported what had been true all along --- `an implementation that
+// does not claim availability reserves nothing' DID NOT HOLD, because this one
+// claimed nothing and reserved anyway.
+//
+// The remedy is not to pick the more likely of the two readings. It is that
+// neither this file nor any comment in it is the party that knows: the answer
+// depends on how the artifact was signed, which is settled after this code is
+// compiled and can differ between two runs of the same binary. So the enquiry
+// performs the thing it is being asked about --- one reservation, one publish,
+// one release --- and reports what the kernel said.
+//
+// The probe is the operation's own path, so an environment where publishing
+// fails is one where this reports unavailable and `kal_exec_alloc' declines,
+// and the two can no longer disagree.
+int probe() {
+    const okm_uptr bytes = granularity();
+    const okm_long m = okm::sys(okm::nr_mmap, 0, static_cast<okm_long>(bytes),
+                                okm::prot_read | okm::prot_write,
+                                okm::map_private | okm::map_anon, -1, 0);
+    if (okm::failed(m)) return 2;
+    const okm_long p = okm::sys(okm::nr_mprotect, m,
+                                static_cast<okm_long>(bytes),
+                                okm::prot_read | okm::prot_exec);
+    okm::sys(okm::nr_munmap, m, static_cast<okm_long>(bytes));
+    return okm::failed(p) ? 2 : 1;
+}
+
+// Asked once. Constant-initialised, so no guard variable is emitted and this
+// file acquires no dependency upon the runtime --- the property the
+// independence check in this package exists to hold. Two contexts racing here
+// perform the probe twice and store the same answer.
+bool available() {
+    static int cached = 0;
+    int v = __atomic_load_n(&cached, __ATOMIC_RELAXED);
+    if (v == 0) { v = probe(); __atomic_store_n(&cached, v, __ATOMIC_RELAXED); }
+    return v == 1;
+}
 
 }  // namespace
 
@@ -89,7 +146,12 @@ extern "C" {
 
 void* kal_exec_alloc(kal_uintptr size) {
     if (size == 0) return nullptr;
-    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), kPage);
+    // An implementation that does not claim availability reserves nothing.
+    // Otherwise the word is advice a caller cannot act upon: it would report
+    // unavailable and then hand back memory, and a caller that believed the
+    // word would have declined memory it could have had.
+    if (!available()) return nullptr;
+    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
     const okm_long r = okm::sys(okm::nr_mmap, 0, static_cast<okm_long>(bytes),
                                 okm::prot_read | okm::prot_write,
                                 okm::map_private | okm::map_anon, -1, 0);
@@ -99,7 +161,7 @@ void* kal_exec_alloc(kal_uintptr size) {
 
 int kal_exec_publish(void* p, kal_uintptr size) {
     if (p == nullptr || size == 0) return kal_err_invalid;
-    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), kPage);
+    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
     const okm_long r = okm::sys(okm::nr_mprotect, reinterpret_cast<okm_long>(p),
                                 static_cast<okm_long>(bytes),
                                 okm::prot_read | okm::prot_exec);
@@ -109,17 +171,19 @@ int kal_exec_publish(void* p, kal_uintptr size) {
 
 void kal_exec_free(void* p, kal_uintptr size) {
     if (p == nullptr || size == 0) return;
-    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), kPage);
+    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
     okm::sys(okm::nr_munmap, reinterpret_cast<okm_long>(p),
              static_cast<okm_long>(bytes));
 }
 
 // A published region may NOT be reserved for writing again on this system, and
-// the position is withheld accordingly. Asking this kernel to make an executable
-// mapping writable is the case it refuses, which is the whole reason the
-// interface separates the two states; a caller that must change published bytes
-// reserves a second region and abandons the first, which is what the header
-// says a zero here means.
-const kal_uintptr kal_exec_props = 0;
+// the position is withheld accordingly. Asking this kernel to make an
+// executable mapping writable is the case it refuses, which is the whole reason
+// the interface separates the two states; a caller that must change published
+// bytes reserves a second region and abandons the first, which is what the
+// header says a zero in that position means.
+kal_uintptr kal_exec_props(void) {
+    return available() ? KAL_EXEC_PROP_AVAILABLE : 0;
+}
 
 }  // extern "C"

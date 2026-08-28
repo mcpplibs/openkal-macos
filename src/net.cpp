@@ -140,12 +140,12 @@ int kal_net_accept(kal_net_listener l, kal_net_conn* out) {
     }
 }
 
-kal_uintptr kal_net_stream(kal_net_conn c) {
+kal_stream kal_net_stream(kal_net_conn c) {
     // The bare descriptor, for the reason kal_fs_stream gives: openkal.stream's
     // operations take whatever the environment's transfer calls take, and a
     // packed word is not that.
     const int fd = fd_of(c);
-    return fd < 0 ? 0u : static_cast<kal_uintptr>(fd);
+    return kal_stream{ fd < 0 ? 0u : static_cast<kal_uintptr>(fd) };
 }
 
 int kal_net_peer(kal_net_conn c, kal_endpoint* out) {
@@ -197,6 +197,6 @@ void kal_net_close_listener(kal_net_listener l) {
 
 // Both positions hold on this kernel: it speaks IPv6 and its `shutdown' ends
 // transfer in one direction while the other continues.
-const kal_uintptr kal_net_props = KAL_NET_PROP_IPV6 | KAL_NET_PROP_HALFCLOSE;
+kal_uintptr kal_net_props(void) { return KAL_NET_PROP_IPV6 | KAL_NET_PROP_HALFCLOSE; }
 
 }  // extern "C"

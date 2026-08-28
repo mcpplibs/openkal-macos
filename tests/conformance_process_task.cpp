@@ -37,12 +37,14 @@ int main() {
     // The program to start is reached through a directory the environment
     // supplied, which is the whole reason the set exists: a program and the
     // program it starts are commonly not beneath one root.
-    kal_dir slash{}; const char* nm = nullptr; kal_uintptr nl = 0;
+    kal_dir slash{}; char nm[512] = {}; kal_uintptr nl = 0;
     bool have_root = false;
     for (kal_uintptr i = 0; i < kal::fs::preopen_count(); ++i) {
-        kal_dir d{}; const char* n = nullptr; kal_uintptr l = 0;
-        if (kal_fs_preopen(i, &d, &n, &l) != kal_ok) continue;
-        if (l == 1 && n[0] == '/') { slash = d; nm = n; nl = l; have_root = true; }
+        kal_dir d{}; char n[512]; kal_uintptr l = 0;
+        if (kal_fs_preopen(i, &d, n, sizeof n, &l) != kal_ok) continue;
+        if (l == 1 && n[0] == '/') {
+            slash = d; nm[0] = '/'; nm[1] = '\0'; nl = l; have_root = true;
+        }
     }
     check(have_root, "a directory covering the file system is supplied");
 

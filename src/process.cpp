@@ -81,9 +81,9 @@ int kal_process_spawn(kal_dir base,
     if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
     if (!envs.build(envp, envp_lens, envc)) return kal_err_no_memory;
 
-    const okm_long in = streams ? static_cast<okm_long>(streams->in)  : 0;
-    const okm_long ou = streams ? static_cast<okm_long>(streams->out) : 0;
-    const okm_long er = streams ? static_cast<okm_long>(streams->err) : 0;
+    const okm_long in = streams ? static_cast<okm_long>(streams->in.h)  : 0;
+    const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
+    const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
 
     bool is_duplicate = false;
     const okm_long child = okm::duplicate(is_duplicate);
@@ -182,9 +182,9 @@ int kal_process_spawn_with(kal_dir base,
         if (granted[i] < 0) return kal_err_invalid;
     }
 
-    const okm_long in = streams ? static_cast<okm_long>(streams->in)  : 0;
-    const okm_long ou = streams ? static_cast<okm_long>(streams->out) : 0;
-    const okm_long er = streams ? static_cast<okm_long>(streams->err) : 0;
+    const okm_long in = streams ? static_cast<okm_long>(streams->in.h)  : 0;
+    const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
+    const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
 
     bool is_duplicate = false;
     const okm_long child = okm::duplicate(is_duplicate);
@@ -247,9 +247,9 @@ int kal_process_terminate(kal_process h) {
 // waited for continues, and this environment collects it when the caller exits.
 void kal_process_close(kal_process) { }
 
-const kal_uintptr kal_process_props =
+kal_uintptr kal_process_props(void) { return
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS
-  | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR;
+  | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR; }
 
 }
