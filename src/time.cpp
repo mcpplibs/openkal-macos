@@ -79,7 +79,7 @@ void kal_time_sleep(kal_duration ns) {
 // exactly this divergence: a program measuring an interval across a suspension
 // obtains different answers from the two, and no operation could report which
 // it is dealing with.
-const kal_uintptr kal_time_props =
-    KAL_TIME_PROP_WALL_AVAILABLE | KAL_TIME_PROP_SLEEP_PRECISE;
+kal_uintptr kal_time_props(void) { return
+    KAL_TIME_PROP_WALL_AVAILABLE | KAL_TIME_PROP_SLEEP_PRECISE; }
 
 }

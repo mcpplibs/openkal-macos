@@ -63,10 +63,10 @@ int await(int fd, short events, kal_u64 ns) {
 
 extern "C" {
 
-kal_io_result kal_timeout_read(kal_stream s, void* buf, kal_uintptr len, kal_u64 ns) {
+kal_intptr kal_timeout_read(kal_stream s, void* buf, kal_uintptr len, kal_u64 ns) {
     // A transfer of zero bytes does not wait and is not bounded. Waiting first
     // would turn a call that always succeeds into one that can expire.
-    if (len == 0) return { 0, kal_ok };
+    if (len == 0) return 0;
 
     const int fd = okm::unpack(s.h);
     // THE STANDARD STREAMS ARE NOT PACKED HANDLES. openkal.stream reports them
@@ -75,18 +75,18 @@ kal_io_result kal_timeout_read(kal_stream s, void* buf, kal_uintptr len, kal_u64
     const int use = (fd >= 0) ? fd : static_cast<int>(s.h);
 
     if (const int rc = await(use, static_cast<short>(okm::poll_in), ns); rc != kal_ok)
-        return { 0, rc };
+        return -rc;
     return kal_stream_read(s, buf, len);
 }
 
-kal_io_result kal_timeout_write(kal_stream s, const void* buf, kal_uintptr len, kal_u64 ns) {
-    if (len == 0) return { 0, kal_ok };
+kal_intptr kal_timeout_write(kal_stream s, const void* buf, kal_uintptr len, kal_u64 ns) {
+    if (len == 0) return 0;
 
     const int fd  = okm::unpack(s.h);
     const int use = (fd >= 0) ? fd : static_cast<int>(s.h);
 
     if (const int rc = await(use, static_cast<short>(okm::poll_out), ns); rc != kal_ok)
-        return { 0, rc };
+        return -rc;
     return kal_stream_write(s, buf, len);
 }
 
@@ -100,13 +100,13 @@ int kal_timeout_accept(kal_net_listener l, kal_u64 ns, kal_net_conn* out) {
     return kal_net_accept(l, out);
 }
 
-kal_io_result kal_timeout_recv_from(kal_datagram d, void* buf, kal_uintptr len,
-                                    kal_endpoint* from, kal_u64 ns) {
+kal_intptr kal_timeout_recv_from(kal_datagram d, void* buf, kal_uintptr len,
+                                 kal_endpoint* from, kal_u64 ns) {
     const int fd = okm::unpack(d.h);
-    if (fd < 0) return { 0, kal_err_invalid };
+    if (fd < 0) return -kal_err_invalid;
 
     if (const int rc = await(fd, static_cast<short>(okm::poll_in), ns); rc != kal_ok)
-        return { 0, rc };
+        return -rc;
     return kal_datagram_recv_from(d, buf, len, from);
 }
 
@@ -160,6 +160,6 @@ int kal_timeout_wait_process(kal_process p, kal_u64 ns, int* status, int* termin
 // honestly report --- and it is also the interval the child-waiting loop above
 // polls at, so a caller asking for less is not told a number one of the
 // operations cannot meet.
-const kal_uintptr kal_timeout_granularity_ns = 1000000u;
+kal_u64 kal_timeout_granularity(void) { return 1000000u; }
 
 }  // extern "C"

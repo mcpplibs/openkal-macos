@@ -120,6 +120,11 @@ void kal_exec_free(void* p, kal_uintptr size) {
 // interface separates the two states; a caller that must change published bytes
 // reserves a second region and abandons the first, which is what the header
 // says a zero here means.
-const kal_uintptr kal_exec_props = 0;
+// Executable memory on this system is granted only to an artifact produced
+// with the entitlement for it, which is a decision made after the link. The
+// interface is provided and the position reports whether this artifact may use
+// it --- clause 6.5's answer at dependency resolution cannot serve an artifact
+// produced once and run in many environments.
+kal_uintptr kal_exec_props(void) { return 0; }
 
 }  // extern "C"

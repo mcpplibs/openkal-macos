@@ -179,6 +179,7 @@ enum : okm_long {
     nr_thread_selfid = 372,
     nr_openat = 463, nr_renameat = 465, nr_faccessat = 466,
     nr_fstatat64 = 470, nr_unlinkat = 472, nr_readlinkat = 473,
+    nr_symlinkat = 474, nr_fstatfs64 = 346, nr_sysctl = 202,
     nr_mkdirat = 475,
     nr_ulock_wait = 515, nr_ulock_wake = 516,
 
@@ -302,6 +303,27 @@ inline int translate(okm_long r) {
 
 // --- this kernel's structure layouts -----------------------------------------
 
+// What this kernel reports about the volume a descriptor is on. It names the
+// format in words rather than by a number, which is what this implementation
+// consults --- a property that varies between the RESOURCES of an interface is
+// answered by an enquiry taking the resource, and here the resource's format is
+// what the enquiry has to look at.
+struct kstatfs64 {
+    okm_u32  f_bsize;
+    okm_u32  f_iosize;          // int32; the pair fills the first eight bytes
+    okm_u64  f_blocks, f_bfree, f_bavail, f_files, f_ffree;
+    okm_u32  f_fsid[2];
+    okm_u32  f_owner;
+    okm_u32  f_type;
+    okm_u32  f_flags;
+    okm_u32  f_fssubtype;
+    char     f_fstypename[16];
+    char     f_mntonname[1024];
+    char     f_mntfromname[1024];
+    okm_u32  f_flags_ext;
+    okm_u32  f_reserved[7];
+};
+
 struct kstat64 {
     okm_u32 dev;
     okm_u32 mode_pad;      // st_mode is 16 bits followed by 16 of nlink
@@ -423,8 +445,14 @@ inline bool acceptable(const char* name, okm_uptr len) {
     return true;
 }
 
+// The greatest length of a name this implementation accepts, which is the
+// buffer below less the terminator it adds. A bound a caller cannot learn
+// produces a failure it cannot attribute: a longer name was refused as
+// kal_err_invalid, which is also the answer for a name that ascends.
+inline constexpr okm_uptr max_name = 1023;
+
 struct terminated {
-    char buf[1024];
+    char buf[max_name + 1];
     bool ok;
     terminated(const char* s, okm_uptr n) : ok(n < sizeof buf) {
         if (ok) { copy(buf, s, n); buf[n] = '\0'; }

@@ -64,14 +64,50 @@ int kind_of(okm_u32 mode) {
     }
 }
 
-void fill_info(const okm::kstat64& st, kal_node_info* out) {
-    *out = kal_node_info{
-        static_cast<kal_uintptr>(st.size),
-        static_cast<kal_u64>(st.mtime_sec) * 1000000000u
-            + static_cast<kal_u64>(st.mtime_nsec),
-        kind_of(okm::stat_mode(st)),
-        (okm::stat_mode(st) & 0200u) != 0 ? 1 : 0,
-    };
+// Writes no more of the structure than the caller says exists on its side, and
+// reports which fields it filled. `wanted' is ignored and every field is
+// filled: one call answers all of them on this kernel, so selecting would cost
+// a branch and save nothing.
+void fill_info(const okm::kstat64& st, kal_u32 wanted, kal_node_info* out) {
+    (void)wanted;
+    const kal_u32 self = out->self_size;
+    kal_node_info v{};
+    v.self_size   = self;
+    v.present     = KAL_INFO_ALL;
+    v.size        = static_cast<kal_u64>(st.size);
+    v.modified_ns = static_cast<kal_u64>(st.mtime_sec) * 1000000000u
+                  + static_cast<kal_u64>(st.mtime_nsec);
+    // Opaque to a caller, which may compare it and may not read it. The device
+    // and the inode are this kernel's answer and not the interface's shape.
+    v.identity[0] = st.dev;
+    v.identity[1] = st.ino;
+    v.kind        = kind_of(okm::stat_mode(st));
+    v.writable    = (okm::stat_mode(st) & 0200u) != 0 ? 1 : 0;
+    const kal_u32 n = self < sizeof v ? self : (kal_u32)sizeof v;
+    okm::copy(out, &v, n);
+}
+
+void fill_absent(kal_node_info* out) {
+    const kal_u32 self = out->self_size;
+    kal_node_info v{};
+    v.self_size = self;
+    v.present   = KAL_INFO_KIND;
+    v.kind      = kal_node_absent;
+    const kal_u32 n = self < sizeof v ? self : (kal_u32)sizeof v;
+    okm::copy(out, &v, n);
+}
+
+// The caller must state how much of the structure exists on its side.
+bool info_ok(const kal_node_info* out) {
+    return out != nullptr && out->self_size >= sizeof(kal_u32) * 2;
+}
+
+// Copies a name into a caller's buffer and reports the length it HAS.
+kal_uintptr put_name(const char* src, kal_uintptr n,
+                     char* out, kal_uintptr cap, kal_uintptr* len) {
+    if (out != nullptr && cap != 0) okm::copy(out, src, n < cap ? n : cap);
+    if (len) *len = n;
+    return n;
 }
 
 // Enumeration reads the kernel's own directory records. It holds a descriptor
@@ -92,14 +128,14 @@ extern "C" {
 
 kal_uintptr kal_fs_preopen_count(void) { kal_uintptr n = 0; table(&n); return n; }
 
-int kal_fs_preopen(kal_uintptr index, kal_dir* out, const char** name, kal_uintptr* len) {
+int kal_fs_preopen(kal_uintptr index, kal_dir* out,
+                   char* name_out, kal_uintptr name_cap, kal_uintptr* name_len) {
     kal_uintptr n = 0;
     preopen* t = table(&n);
     if (index >= n || out == nullptr) return kal_err_invalid;
     if (t[index].handle == 0) return kal_err_permission;
     *out = kal_dir{ t[index].handle };
-    if (name) *name = t[index].name;
-    if (len)  *len  = t[index].len;
+    put_name(t[index].name, t[index].len, name_out, name_cap, name_len);
     return kal_ok;
 }
 
@@ -135,14 +171,6 @@ int kal_fs_open(kal_dir base, const char* name, kal_uintptr len,
     return kal_ok;
 }
 
-int kal_fs_open_file(kal_dir base, const char* name, kal_uintptr len,
-                     int write, int create, kal_file* out) {
-    kal_uintptr flags = KAL_OPEN_READ;
-    if (write)  flags |= KAL_OPEN_WRITE;
-    if (create) flags |= KAL_OPEN_WRITE | KAL_OPEN_CREATE | KAL_OPEN_TRUNCATE;
-    return kal_fs_open(base, name, len, flags, out);
-}
-
 void kal_fs_close_dir(kal_dir d) {
     const int fd = okm::unpack(d.h);
     if (fd >= 0) { okm::retire(d.h); okm::sys(okm::nr_close, fd); }
@@ -153,9 +181,11 @@ void kal_fs_close_file(kal_file f) {
     if (fd >= 0) { okm::retire(f.h); okm::sys(okm::nr_close, fd); }
 }
 
-kal_uintptr kal_fs_stream(kal_file f) {
+kal_uintptr kal_fs_max_name(void) { return okm::max_name; }
+
+kal_stream kal_fs_stream(kal_file f) {
     const int fd = okm::unpack(f.h);
-    return fd < 0 ? 0u : static_cast<kal_uintptr>(fd);
+    return kal_stream{ fd < 0 ? 0u : static_cast<kal_uintptr>(fd) };
 }
 
 int kal_fs_seek(kal_file f, kal_i64 offset, int whence, kal_u64* result) {
@@ -177,34 +207,41 @@ int kal_fs_truncate(kal_file f, kal_u64 size) {
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
-int kal_fs_info(kal_dir base, const char* name, kal_uintptr len, kal_node_info* out) {
+int kal_fs_info(kal_dir base, const char* name, kal_uintptr len,
+                kal_uintptr flags, kal_u32 wanted, kal_node_info* out) {
     const int b = okm::unpack(base.h);
-    if (b < 0 || out == nullptr || !okm::acceptable(name, len)) return kal_err_invalid;
+    if (b < 0 || !info_ok(out) || !okm::acceptable(name, len)) return kal_err_invalid;
     okm::terminated t(name, len); if (!t.ok) return kal_err_invalid;
     okm::kstat64 st{};
+    // RESOLVES BY DEFAULT, SO THAT ASKING AND OPENING ANSWER THE SAME QUESTION.
+    // This implementation asked with AT_SYMLINK_NOFOLLOW always while
+    // `kal_fs_open' resolved, so a name referring to a node whose content is
+    // another name was reported as that node while opening it reached a file.
+    const okm_long at = (flags & KAL_FS_NO_RESOLVE) ? okm::at_symlink_nofollow : 0;
     const okm_long r = okm::sys(okm::nr_fstatat64, b, reinterpret_cast<okm_long>(t.buf),
-                                reinterpret_cast<okm_long>(&st), okm::at_symlink_nofollow);
+                                reinterpret_cast<okm_long>(&st), at);
     if (okm::failed(r)) {
         // Clause 7.7: enquiry about a name that does not exist is answered, not
         // refused. A component of the name that is not a directory is the same
-        // answer, because the name still refers to nothing.
-        if (r == -okm::e_noent || r == -okm::e_notdir) {
-            *out = kal_node_info{ 0, 0, kal_node_absent, 0 };
+        // answer, and so is a node whose content names something absent when
+        // the enquiry resolves.
+        if (r == -okm::e_noent || r == -okm::e_notdir || r == -okm::e_loop) {
+            fill_absent(out);
             return kal_ok;
         }
         return okm::translate(r);
     }
-    fill_info(st, out);
+    fill_info(st, wanted, out);
     return kal_ok;
 }
 
-int kal_fs_file_info(kal_file f, kal_node_info* out) {
+int kal_fs_file_info(kal_file f, kal_u32 wanted, kal_node_info* out) {
     const int fd = okm::unpack(f.h);
-    if (fd < 0 || out == nullptr) return kal_err_invalid;
+    if (fd < 0 || !info_ok(out)) return kal_err_invalid;
     okm::kstat64 st{};
     const okm_long r = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
     if (okm::failed(r)) return okm::translate(r);
-    fill_info(st, out);
+    fill_info(st, wanted, out);
     return kal_ok;
 }
 
@@ -288,8 +325,9 @@ int kal_fs_list_begin(kal_dir d, kal_uintptr* iter) {
     return kal_ok;
 }
 
-int kal_fs_list_next(kal_dir, kal_uintptr* iter, const char** name,
-                     kal_uintptr* len, int* kind) {
+int kal_fs_list_next(kal_dir, kal_uintptr* iter,
+                     char* name_out, kal_uintptr name_cap,
+                     kal_uintptr* name_len, int* kind) {
     if (iter == nullptr || *iter == 0) return kal_err_invalid;
     auto* s = reinterpret_cast<listing*>(*iter);
     for (;;) {
@@ -303,8 +341,7 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter, const char** name,
                 okm::sys(okm::nr_close, s->fd);
                 kal_free(s, sizeof(listing), alignof(listing));
                 *iter = 0;
-                if (name) *name = nullptr;
-                if (len)  *len  = 0;
+                if (name_len) *name_len = 0;
                 return okm::failed(r) ? okm::translate(r) : kal_ok;
             }
             s->used = static_cast<okm_uptr>(r);
@@ -316,8 +353,7 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter, const char** name,
         // They exist to support ascent, which this interface does not offer.
         if (e->name[0] == '.' && (e->name[1] == '\0'
             || (e->name[1] == '.' && e->name[2] == '\0'))) continue;
-        if (name) *name = e->name;
-        if (len)  *len  = e->namlen;
+        put_name(e->name, e->namlen, name_out, name_cap, name_len);
         if (kind) *kind = e->type == okm::dt_dir ? kal_node_directory
                         : e->type == okm::dt_reg ? kal_node_file
                         : e->type == okm::dt_lnk ? kal_node_link : kal_node_other;
@@ -329,7 +365,96 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter, const char** name,
 // it is ordinarily installed on. A program that creates two names differing
 // only in case succeeds on the Linux implementation and not on this one, and
 // the position reports it in advance, which no operation could.
-const kal_uintptr kal_fs_props =
-    KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME;
+// The properties of the volume a directory is on.
+//
+// AN ENQUIRY TAKING THE RESOURCE, BECAUSE EVERY POSITION IS A PROPERTY OF THE
+// FORMAT. A word per implementation could state none of them honestly here: the
+// volume this system is ordinarily installed on compares names without regard
+// to case, and a volume attached to the same machine may not --- and this
+// implementation offers the whole filesystem as a preopen, so both are
+// reachable through it.
+//
+// This kernel names the format in words rather than by a number, so that is
+// what is consulted. For a format it does not recognise, what is claimed is the
+// set that cannot be wrong: a modification time is reported for every volume it
+// mounts, and `renameat' within one directory is atomic by POSIX.
+kal_uintptr kal_fs_props(kal_dir d) {
+    const int fd = okm::unpack(d.h);
+    const kal_uintptr conservative =
+        KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME;
+    if (fd < 0) return 0;
+
+    okm::kstatfs64 sf{};
+    const okm_long r = okm::sys(okm::nr_fstatfs64, fd, reinterpret_cast<okm_long>(&sf));
+    if (okm::failed(r)) return conservative;
+
+    const auto named = [&](const char* w) {
+        for (int i = 0; i < 16; ++i) {
+            if (sf.f_fstypename[i] != w[i]) return false;
+            if (w[i] == '\0') return true;
+        }
+        return false;
+    };
+
+    // Nodes whose content is another name, without a case distinction. This is
+    // the ordinary volume of this system.
+    if (named("apfs") || named("hfs") || named("autofs"))
+        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS;
+
+    // A case-sensitive volume with such nodes: a disk image formatted that way,
+    // or a network volume presenting one.
+    if (named("nfs") || named("smbfs") || named("webdav"))
+        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS;
+
+    // The FAT family stores neither a case distinction nor a node that names
+    // another. `symlinkat' on such a volume reports a refusal, and this is
+    // where a caller learns it before it tries.
+    if (named("msdos") || named("exfat")) return conservative;
+
+    return conservative;
+}
+
+// Nodes whose content is another name.
+int kal_fs_link_create(kal_dir base, const char* name, kal_uintptr len,
+                       const char* target, kal_uintptr target_len,
+                       kal_uintptr flags) {
+    // The target is content rather than a name this interface resolves, so it
+    // is not passed through `acceptable' --- which would refuse one that
+    // ascends, and one that ascends is the ordinary case for a relative target.
+    (void)flags;   // this kernel does not distinguish a link to a directory
+    const int b = okm::unpack(base.h);
+    if (b < 0 || !okm::acceptable(name, len) || target == nullptr) return kal_err_invalid;
+    okm::terminated n(name, len);            if (!n.ok) return kal_err_invalid;
+    okm::terminated tgt(target, target_len); if (!tgt.ok) return kal_err_invalid;
+    const okm_long r = okm::sys(okm::nr_symlinkat, reinterpret_cast<okm_long>(tgt.buf),
+                                b, reinterpret_cast<okm_long>(n.buf));
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+kal_intptr kal_fs_link_read(kal_dir base, const char* name, kal_uintptr len,
+                            char* out, kal_uintptr cap) {
+    const int b = okm::unpack(base.h);
+    if (b < 0 || !okm::acceptable(name, len)) return -kal_err_invalid;
+    okm::terminated t(name, len); if (!t.ok) return -kal_err_invalid;
+
+    // The kernel truncates into the buffer it is given and does not report the
+    // length the content has, so a caller asking for the length --- a capacity
+    // of zero --- is served from a buffer of this implementation's own.
+    char own[okm::max_name + 1];
+    char* dst = (out != nullptr && cap != 0) ? out : own;
+    okm_uptr room = (out != nullptr && cap != 0) ? cap : sizeof own;
+    okm_long r = okm::sys(okm::nr_readlinkat, b, reinterpret_cast<okm_long>(t.buf),
+                          reinterpret_cast<okm_long>(dst), static_cast<okm_long>(room));
+    if (okm::failed(r)) return -okm::translate(r);
+
+    if (static_cast<okm_uptr>(r) == room && room < sizeof own) {
+        const okm_long full = okm::sys(okm::nr_readlinkat, b,
+                                       reinterpret_cast<okm_long>(t.buf),
+                                       reinterpret_cast<okm_long>(own),
+                                       static_cast<okm_long>(sizeof own));
+        if (!okm::failed(full)) r = full;
+    }
+    return static_cast<kal_intptr>(r);
+}
 
 }
