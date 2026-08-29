@@ -6,6 +6,20 @@ import openkal.stream;
 
 namespace {
 int failures = 0;
+
+void say(const char* s) {
+    kal_uintptr n = 0; while (s[n]) ++n;
+    kal::write(kal::err(), s, n);
+}
+
+void say_num(int v) {
+    if (v < 0) { kal::write(kal::err(), "-", 1); v = -v; }
+    char b[12]; int i = 12;
+    if (v == 0) b[--i] = '0';
+    while (v > 0) { b[--i] = static_cast<char>('0' + v % 10); v /= 10; }
+    kal::write(kal::err(), b + i, static_cast<kal_uintptr>(12 - i));
+}
+
 void check(bool ok, const char* what) {
     if (ok) return;
     ++failures;
@@ -57,17 +71,52 @@ int main() {
         const char* false_paths[] = { "bin/false", "usr/bin/false" };
         const kal_uintptr false_lens[] = { 9, 13 };
 
+        // THE CANDIDATE IS CHOSEN BY ASKING, AND IT USED TO BE CHOSEN BY
+        // SPAWNING AND RETRYING. That retry could not work and never ran:
+        // kal_process_spawn reports whether the DUPLICATE was made, and the
+        // program is replaced afterwards, inside a copy the caller no longer
+        // is. A path that does not exist therefore produces kal_ok and a
+        // duplicate that finishes with 127, so the first candidate was always
+        // taken and the second was unreachable code.
+        //
+        // On a system holding /usr/bin/true and no /bin/true the consequence
+        // was `status == 127' at the observation below, which is what this
+        // system reported the first time these suites were ever run. The
+        // observation after it -- that a non-zero status is reported as such --
+        // held throughout, upon a program that was never started.
+        auto locate = [&](const char* const* paths, const kal_uintptr* lens_) -> int {
+            for (int i = 0; i < 2; ++i) {
+                kal_node_info info{}; info.self_size = sizeof info;
+                if (kal_fs_info(slash, paths[i], lens_[i], 0, kal::fs::field::kind, &info) != kal_ok)
+                    continue;
+                if (info.kind != kal_node_absent) return i;
+            }
+            return -1;
+        };
+
+        const int t = locate(true_paths, true_lens);
+        const int fpath = locate(false_paths, false_lens);
+        check(t >= 0, "a program that succeeds is found");
+        check(fpath >= 0, "a program that fails is found");
+
         kal_process p{};
         const char* argv[] = { "openkal" };
         const kal_uintptr lens[] = { 7 };
         int rc = kal_err_invalid;
-        for (int i = 0; i < 2 && rc != kal_ok; ++i)
-            rc = kal_process_spawn(slash, true_paths[i], true_lens[i], argv, lens, 1,
+        if (t >= 0)
+            rc = kal_process_spawn(slash, true_paths[t], true_lens[t], argv, lens, 1,
                                    nullptr, nullptr, 0, nullptr, &p);
         check(rc == kal_ok, "a program is started");
         if (rc == kal_ok) {
             int status = -1, terminated = -1;
             check(kal_process_wait(p, &status, &terminated) == kal_ok, "the program is waited for");
+            // The observed status is reported when it is wrong. `127' names an
+            // image that was not replaced and `0' names one that ran; without
+            // the number the two arrive as the same line.
+            if (!(status == 0 && terminated == 0)) {
+                say("  status="); say_num(status);
+                say(" terminated="); say_num(terminated); say("\n");
+            }
             check(status == 0 && terminated == 0, "the status it finished with is reported");
             kal_process_close(p);
         }
@@ -78,13 +127,19 @@ int main() {
         kal_process q{};
         const char* qargv[] = { "openkal" };
         int qrc = kal_err_invalid;
-        for (int i = 0; i < 2 && qrc != kal_ok; ++i)
-            qrc = kal_process_spawn(slash, false_paths[i], false_lens[i], qargv, lens, 1,
+        if (fpath >= 0)
+            qrc = kal_process_spawn(slash, false_paths[fpath], false_lens[fpath], qargv, lens, 1,
                                     nullptr, nullptr, 0, nullptr, &q);
+        check(qrc == kal_ok, "the program that fails is started");
         if (qrc == kal_ok) {
             int status = -1, terminated = -1;
             kal_process_wait(q, &status, &terminated);
-            check(status != 0, "a non-zero status is reported as such");
+            // NOT MERELY NON-ZERO. 127 is what a duplicate reports when the
+            // image was never replaced, so `!= 0' is satisfied by a program
+            // that did not run -- which is precisely how this observation held
+            // while the one above did not.
+            check(status == 1 && terminated == 0,
+                  "the status of a program that fails is its own and not 127");
             kal_process_close(q);
         }
 
@@ -105,12 +160,18 @@ int main() {
         const char* script = "test \"$0\" = openkal-observed-argv0";
         kal_uintptr script_len = 0; while (script[script_len]) ++script_len;
 
+        // Located rather than retried, for the reason recorded above: the retry
+        // this replaces could not distinguish a path that does not exist from
+        // one that does, so it always took the first.
+        const int sh = locate(sh_paths, sh_lens);
+        check(sh >= 0, "a shell is found");
+
         kal_process r{};
         const char*       rargv[] = { "openkal-observed-argv0", "-c", script };
         const kal_uintptr rlens[] = { 22, 2, script_len };
         int rrc = kal_err_invalid;
-        for (int i = 0; i < 2 && rrc != kal_ok; ++i)
-            rrc = kal_process_spawn(slash, sh_paths[i], sh_lens[i], rargv, rlens, 3,
+        if (sh >= 0)
+            rrc = kal_process_spawn(slash, sh_paths[sh], sh_lens[sh], rargv, rlens, 3,
                                     nullptr, nullptr, 0, nullptr, &r);
         check(rrc == kal_ok, "a shell is started");
         if (rrc == kal_ok) {
@@ -153,7 +214,7 @@ int main() {
     kal_task_yield();
     check(kal_task_current() != 0, "the calling context has an identity");
 
-    const char ok[] = "openkal-linux: process and task conformance\n";
+    const char ok[] = "openkal-macos: process and task conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);
     return failures == 0 ? 0 : 1;
 }

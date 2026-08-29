@@ -100,7 +100,7 @@ int main() {
     check(kal_fs_remove(root, "okl_dir", 7) == kal_ok, "the directory is removed");
     check(kal_fs_remove(root, "okl_probe.txt", 13) == kal_ok, "the file is removed");
 
-    const char ok[] = "openkal-linux: file system conformance\n";
+    const char ok[] = "openkal-macos: file system conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);
     return failures == 0 ? 0 : 1;
 }
