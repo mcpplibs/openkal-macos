@@ -16,7 +16,7 @@ int main() {
     // cannot be used.
     if (kal::alloc(0, 8) != nullptr) return 1;
 
-    const char ok[] = "openkal-linux: memory conformance\n";
+    const char ok[] = "openkal-macos: memory conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);
     return 0;
 }

@@ -32,7 +32,7 @@ int main() {
     // A write transfers the whole buffer or reports why it could not. The
     // specification excludes a successful partial transfer, so a conforming
     // result reports either the full count or a non-zero error.
-    const char msg[] = "openkal-linux: conformance\n";
+    const char msg[] = "openkal-macos: conformance\n";
     // ⭐ ONE SIGNED WORD: the count, or the negated condition when no byte
     // moved. A caller never inspects two things to learn one thing.
     const kal_intptr r = kal::write(kal::out(), msg, sizeof(msg) - 1);

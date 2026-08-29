@@ -153,7 +153,7 @@ int main() {
     kal_task_yield();
     check(kal_task_current() != 0, "the calling context has an identity");
 
-    const char ok[] = "openkal-linux: process and task conformance\n";
+    const char ok[] = "openkal-macos: process and task conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);
     return failures == 0 ? 0 : 1;
 }

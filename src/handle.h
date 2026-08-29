@@ -24,6 +24,18 @@ inline okm_uptr pack(int fd) {
 }
 
 // Returns the descriptor, or -1 if the word does not name a live one.
+//
+// THIS ACCEPTS A WORD THAT WAS NEVER PACKED, AND SILENTLY. A bare descriptor N
+// has the shape of a packed handle naming N-1 whose generation is still zero,
+// so this returns N-1 for it rather than -1. Nothing here can tell the two
+// apart: the word is one machine word and carries no tag.
+//
+// The consequence is that a handle of the OTHER discipline must never reach
+// this function. openkal.stream's handles are bare descriptors (stream.cpp
+// states why), and src/timeout.cpp used to pass one here and wait upon the
+// descriptor below the one it then transferred upon. Owned handles --- kal_file,
+// kal_dir, kal_net_listener, kal_net_conn, kal_datagram --- are the whole of
+// this function's domain.
 inline int unpack(okm_uptr h) {
     const int fd = static_cast<int>(h & 0xffffffffu) - 1;
     if (fd < 0 || fd >= kMaxDescriptor) return -1;

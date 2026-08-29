@@ -59,6 +59,36 @@ int await(int fd, short events, kal_u64 ns) {
     return kal_ok;
 }
 
+// A STREAM HANDLE IS A DESCRIPTOR AND IS NOT DECODED. stream.cpp states it in
+// terms, kal_stream_read and kal_stream_write take it as one, and so must the
+// wait that precedes them: the wait and the transfer that follows it have to
+// name the same object or the wait answers about something else.
+//
+// THIS FILE USED TO DECODE IT AS AN OWNED HANDLE, AND THE DECODE SUCCEEDED.
+// handle.h packs an owned handle as (generation << 32) | (fd + 1), so a bare
+// descriptor N has exactly the shape of a packed handle naming N-1, and
+// okm::unpack accepts it whenever generation N-1 is still zero -- which is
+// every index at which no owned handle has yet been released. The wait was
+// therefore performed upon descriptor N-1 and the transfer upon N.
+//
+// The former reading tested `unpack` and fell back when it failed, on the
+// stated ground that the standard streams are not packed. That ground is
+// correct and the conclusion drawn from it was not: NO stream handle is packed
+// here, and of the three standard ones only kal_stdin, whose handle is zero,
+// fails to decode. kal_stdout decoded to descriptor 0 and kal_stderr to 1.
+//
+// What a caller observed was an expiry for a stream that had bytes waiting, or
+// a wait without bound inside an operation that states one, according to what
+// happened to occupy the descriptor below. Both are functions of the process's
+// descriptor history, so the same program answered differently when run alone
+// and when run after something else -- and the index healed for good once an
+// owned handle at N-1 had been released, because that advances the generation
+// and makes the decode fail correctly.
+//
+// Found in openkal-linux, whose timeout.cpp is this file's counterpart and
+// carried the same four call sites with the same two wrong.
+int stream_fd(kal_stream s) { return static_cast<int>(s.h); }
+
 }  // namespace
 
 extern "C" {
@@ -68,13 +98,8 @@ kal_intptr kal_timeout_read(kal_stream s, void* buf, kal_uintptr len, kal_u64 ns
     // would turn a call that always succeeds into one that can expire.
     if (len == 0) return 0;
 
-    const int fd = okm::unpack(s.h);
-    // THE STANDARD STREAMS ARE NOT PACKED HANDLES. openkal.stream reports them
-    // as the descriptors themselves, so a word that does not unpack is taken to
-    // be one of those rather than being refused.
-    const int use = (fd >= 0) ? fd : static_cast<int>(s.h);
-
-    if (const int rc = await(use, static_cast<short>(okm::poll_in), ns); rc != kal_ok)
+    if (const int rc = await(stream_fd(s), static_cast<short>(okm::poll_in), ns);
+        rc != kal_ok)
         return -rc;
     return kal_stream_read(s, buf, len);
 }
@@ -82,14 +107,19 @@ kal_intptr kal_timeout_read(kal_stream s, void* buf, kal_uintptr len, kal_u64 ns
 kal_intptr kal_timeout_write(kal_stream s, const void* buf, kal_uintptr len, kal_u64 ns) {
     if (len == 0) return 0;
 
-    const int fd  = okm::unpack(s.h);
-    const int use = (fd >= 0) ? fd : static_cast<int>(s.h);
-
-    if (const int rc = await(use, static_cast<short>(okm::poll_out), ns); rc != kal_ok)
+    if (const int rc = await(stream_fd(s), static_cast<short>(okm::poll_out), ns);
+        rc != kal_ok)
         return -rc;
     return kal_stream_write(s, buf, len);
 }
 
+// THE TWO OPERATIONS BELOW DO DECODE, AND THAT IS NOT AN INCONSISTENCY WITH THE
+// TWO ABOVE. A listener and a datagram are owned: their handles are made by
+// okm::pack and released by okm::retire, so the decode is the operation that
+// recovers the descriptor and its failure is how a released handle is refused.
+// A stream is borrowed and carries no generation. The four call sites divide
+// exactly along that line, and the two that were wrong were the two that had a
+// borrowed handle in hand.
 int kal_timeout_accept(kal_net_listener l, kal_u64 ns, kal_net_conn* out) {
     if (out == nullptr) return kal_err_invalid;
     const int fd = okm::unpack(l.h);

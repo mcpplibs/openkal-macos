@@ -215,6 +215,32 @@ jobs:
           }
           subst mcpp.toml .spec
 
+      # THIS PACKAGE'S OWN TESTS HAD NEVER RUN.
+      #
+      # tests/ has held five suites since this implementation was written and no
+      # workflow invoked them. What ran was the specification's suite, which is a
+      # different instrument: it examines what every implementation must do, and
+      # these examine what this one does with the system beneath it. A defect
+      # visible only to the second kind was therefore invisible here, which is
+      # what happened to openkal.timeout -- there was no observation of it in
+      # either place that a wait upon the wrong descriptor did not satisfy.
+      #
+      # The step is openkal-linux's, unchanged, including the assertion that
+      # every suite ran: a suite that discovered nothing reports success.
+      - name: This package's own tests
+        run: |
+          set -euo pipefail
+          mcpp test 2>&1 | tee tests.log
+          # The list is derived from the files present rather than written out
+          # here: a hand-written list names the suites that existed when it was
+          # written, and one added afterwards escapes the assertion silently.
+          missing=0
+          for f in tests/*.cpp; do
+            name="$(basename "$f" .cpp)"
+            grep -q "^$name \.\.\. ok" tests.log || { echo "did not run or did not pass: $name" >&2; missing=1; }
+          done
+          test "$missing" -eq 0
+
       # The other architecture, as far as this system allows it to be reached.
       #
       # The system-call numbers agree between the two --- measured, in the
