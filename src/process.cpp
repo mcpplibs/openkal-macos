@@ -56,34 +56,97 @@ struct vector {
 };
 
 constexpr okm_long nr_fchdir = 13;
+// openkal 0.11: the unit a started program joins.
+constexpr okm_long nr_setpgid = 82;
+
 
 }  // namespace
 
 extern "C" {
 
-int kal_process_spawn(kal_dir base,
+// Starting a program. One function since openkal 0.11, where three declarations
+// became one and their modifiers became positions in `kal_spawn'.
+//
+// ⚠️⚠️ AND THIS IMPLEMENTATION IS WHERE THE MISSING MODIFIER WAS ALREADY VISIBLE,
+// which is worth recording rather than quietly fixing.
+//
+// This kernel has no `execveat', so a program named relative to a directory has
+// always been started by entering that directory first --- the `fchdir(base)'
+// below used to be the whole story. So a started program's working directory WAS
+// `base' here, and on the other kernel it was whatever that implementation
+// happened to be in. ⭐ Same openkal calls, two different observable answers,
+// and neither was wrong because the specification said nothing.
+//
+// ⇒ 0.11 gives the caller a second directory, and both implementations now enter
+// the one the caller named. The divergence is gone because the thing that caused
+// it --- a property nobody had declared --- is declared.
+int kal_process_spawn(const kal_spawn* how,
                       const char* path, kal_uintptr path_len,
                       const char** argv, const kal_uintptr* argv_lens, kal_uintptr argc,
                       const char** envp, const kal_uintptr* envp_lens, kal_uintptr envc,
                       const kal_spawn_streams* streams,
                       kal_process* out) {
-    const int b = okm::unpack(base.h);
-    if (b < 0 || out == nullptr) return kal_err_invalid;
+    if (how == nullptr || out == nullptr) return kal_err_invalid;
+
+    const int b = okm::unpack(how->base.h);
+    const int w = okm::unpack(how->work.h);
+    if (b < 0 || w < 0) return kal_err_invalid;
     if (!okm::acceptable(path, path_len)) return kal_err_invalid;
+    if (how->grant_count > 0 && how->grants == nullptr) return kal_err_invalid;
+
+    // ⚠️ A LIFETIME THIS KERNEL CANNOT BIND IS REFUSED BEFORE ANYTHING STARTS.
+    // The reason is unchanged from 0.10 and is stated at kal_process_props: the
+    // binding must hold however the caller ends, including when it is killed
+    // outright, and what this system offers instead is a WATCH, which needs a
+    // live context to notice. Composing it would move the defect from "refused"
+    // to "works except when it matters".
+    if (how->flags != 0) return kal_err_not_supported;
+
     okm::terminated p(path, path_len);
     if (!p.ok) return kal_err_invalid;
 
-    // The vector is passed unaltered. Clause 7.6: argv[0] is the name the
-    // started program observes as its own, and it is the caller's to choose ---
-    // the started program reads it through kal_env_arg(0), so a caller that did
-    // not supply it could not predict what the program would read.
     vector args, envs;
     if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
     if (!envs.build(envp, envp_lens, envc)) return kal_err_no_memory;
 
+    constexpr kal_uintptr max_grants = 16;
+    if (how->grant_count > max_grants) return kal_err_invalid;
+    int granted[max_grants];
+    for (kal_uintptr i = 0; i < how->grant_count; ++i) {
+        granted[i] = okm::unpack(how->grants[i].dir.h);
+        if (granted[i] < 0) return kal_err_invalid;
+    }
+
+    // ⭐ THE PROGRAM'S NAME IS MADE ABSOLUTE BEFORE THE DIRECTORY MOVES, because
+    // with no `execveat' the two things `base' and `work' now mean cannot both be
+    // served by one `fchdir'. `F_GETPATH' answers the path of an open directory,
+    // which src/fs.cpp already relies on for the same reason: this kernel has no
+    // call that reports a working directory, so a path is obtained from the
+    // descriptor that names it.
+    char whole[1024];
+    kal_uintptr n = 0;
+    if (p.buf[0] == '/') {
+        while (p.buf[n] && n < sizeof whole - 1) { whole[n] = p.buf[n]; ++n; }
+    } else {
+        const okm_long r = okm::sys(okm::nr_fcntl, b, okm::f_getpath,
+                                    reinterpret_cast<okm_long>(whole));
+        if (okm::failed(r)) return okm::translate(r);
+        while (whole[n] && n < sizeof whole - 1) ++n;
+        if (n && whole[n - 1] != '/' && n < sizeof whole - 1) whole[n++] = '/';
+        for (kal_uintptr i = 0; p.buf[i] && n < sizeof whole - 1; ++i) whole[n++] = p.buf[i];
+    }
+    if (n >= sizeof whole - 1) return kal_err_invalid;
+    whole[n] = '\0';
+
     const okm_long in = streams ? static_cast<okm_long>(streams->in.h)  : 0;
     const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
     const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
+
+    // ⭐ The unit, named here by a process group --- which is to say by whichever
+    // program formed it first. Zero for the first member; a later one is given
+    // the number to join.
+    const okm_long join = how->job ? static_cast<okm_long>(how->job->h) : 0;
+    const bool     unit = how->job != nullptr;
 
     bool is_duplicate = false;
     const okm_long child = okm::duplicate(is_duplicate);
@@ -97,12 +160,27 @@ int kal_process_spawn(kal_dir base,
         if (in != 0) okm::sys(okm::nr_dup2, in, 0);
         if (ou != 0) okm::sys(okm::nr_dup2, ou, 1);
         if (er != 0) okm::sys(okm::nr_dup2, er, 2);
-        okm::sys(nr_fchdir, b);
-        okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(p.buf),
+
+        for (kal_uintptr i = 0; i < how->grant_count; ++i) {
+            const okm_long want = static_cast<okm_long>(3 + i);
+            if (granted[i] != want) okm::sys(okm::nr_dup2, granted[i], want);
+        }
+
+        // The directory the program RUNS in --- `whole' already carries where it
+        // is named from, so this no longer has to serve both.
+        okm::sys(nr_fchdir, w);
+
+        if (unit) okm::sys(nr_setpgid, 0, join);
+
+        okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
                  reinterpret_cast<okm_long>(args.slots),
                  reinterpret_cast<okm_long>(envs.slots));
         for (;;) okm::sys(okm::nr_exit, 127);
     }
+
+    // Written only after the start succeeded, and only when the unit was new:
+    // the first member's identifier IS the group's.
+    if (unit && join == 0) how->job->h = static_cast<kal_uintptr>(child);
 
     *out = kal_process{ static_cast<kal_uintptr>(child) };
     return kal_ok;
@@ -149,70 +227,8 @@ void kal_process_channel_close(kal_stream s) {
 }
 
 // Starting a program that receives exactly the directories named.
-//
-// The grants are placed as descriptors three and upward, which is where
-// kal_fs_preopen reads them back from. The inverse relationship clause 7.11
-// describes is between those two operations, which is why they must agree about
-// the numbering rather than each choosing one.
-int kal_process_spawn_with(kal_dir base,
-                           const char* path, kal_uintptr path_len,
-                           const char** argv, const kal_uintptr* argv_lens, kal_uintptr argc,
-                           const char** envp, const kal_uintptr* envp_lens, kal_uintptr envc,
-                           const kal_spawn_streams* streams,
-                           const kal_preopen* grants, kal_uintptr grant_count,
-                           kal_process* out) {
-    const int b = okm::unpack(base.h);
-    if (b < 0 || out == nullptr) return kal_err_invalid;
-    if (!okm::acceptable(path, path_len)) return kal_err_invalid;
-    if (grant_count > 0 && grants == nullptr) return kal_err_invalid;
-    okm::terminated p(path, path_len);
-    if (!p.ok) return kal_err_invalid;
 
-    vector args, envs;
-    if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
-    if (!envs.build(envp, envp_lens, envc)) return kal_err_no_memory;
-
-    // Resolved before the duplication, because a failure after it would leave a
-    // child to be reaped and a caller holding an error it cannot act upon.
-    constexpr kal_uintptr max_grants = 16;
-    if (grant_count > max_grants) return kal_err_invalid;
-    int granted[max_grants];
-    for (kal_uintptr i = 0; i < grant_count; ++i) {
-        granted[i] = okm::unpack(grants[i].dir.h);
-        if (granted[i] < 0) return kal_err_invalid;
-    }
-
-    const okm_long in = streams ? static_cast<okm_long>(streams->in.h)  : 0;
-    const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
-    const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
-
-    bool is_duplicate = false;
-    const okm_long child = okm::duplicate(is_duplicate);
-    if (okm::failed(child)) return okm::translate(child);
-
-    if (is_duplicate) {
-        if (in != 0) okm::sys(okm::nr_dup2, in, 0);
-        if (ou != 0) okm::sys(okm::nr_dup2, ou, 1);
-        if (er != 0) okm::sys(okm::nr_dup2, er, 2);
-
-        // dup2 onto the same number succeeds and does nothing, unlike dup3,
-        // which refuses. Either behaviour is right for this loop; only the
-        // reason differs, and it is stated so that a reader comparing the two
-        // implementations does not take one of them for an oversight.
-        for (kal_uintptr i = 0; i < grant_count; ++i)
-            okm::sys(okm::nr_dup2, granted[i], static_cast<okm_long>(3 + i));
-
-        okm::sys(nr_fchdir, b);
-        okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(p.buf),
-                 reinterpret_cast<okm_long>(args.slots),
-                 reinterpret_cast<okm_long>(envs.slots));
-        for (;;) okm::sys(okm::nr_exit, 127);
-    }
-
-    *out = kal_process{ static_cast<kal_uintptr>(child) };
-    return kal_ok;
-}
-
+// One program, whatever unit it is in --- the unit has its own operation below,
 int kal_process_wait(kal_process h, int* status, int* terminated_by_environment) {
     if (h.h == 0) return kal_err_invalid;
     int st = 0;
@@ -237,11 +253,54 @@ int kal_process_wait(kal_process h, int* status, int* terminated_by_environment)
     return kal_ok;
 }
 
+// so this one's meaning never turns on how the program was started.
 int kal_process_terminate(kal_process h) {
     if (h.h == 0) return kal_err_invalid;
     const okm_long r = okm::sys(okm::nr_kill, static_cast<okm_long>(h.h), 15 /* SIGTERM */);
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
+
+// ⚠️⚠️ NOT CLAIMED HERE, FOR THE SAME REASON THE SIGPIPE NOTE IN src/env.cpp
+// GIVES. Observing a request to end means installing a disposition, and this
+// kernel's `sigaction' takes a structure carrying a TRAMPOLINE its C library
+// supplies. A disposition installed with the wrong shape shows up as a program
+// dying in a way nobody can trace --- and a facility this repository has not
+// MEASURED is exactly what it refuses to claim elsewhere.
+//
+// ⇒ Null, and KAL_PROCESS_PROP_STOP_REQUESTED unclaimed, so a caller that asks
+// first is told. The other implementation answers it; this one will when it can
+// be exercised here.
+const kal_u32* kal_process_stop_requested(void) { return 0; }
+
+// This program itself joins or forms a unit --- what `kal_spawn.job' cannot say,
+// because that places a program the caller STARTS and a copy wishing to lead a
+// unit must say so about ITSELF before it replaces itself.
+int kal_process_job_enter(kal_job* j) {
+    if (j == nullptr) return kal_err_invalid;
+    const okm_long join = static_cast<okm_long>(j->h);
+    const okm_long r = okm::sys(nr_setpgid, 0, join);
+    if (okm::failed(r)) return okm::translate(r);
+    if (join == 0) j->h = static_cast<kal_uintptr>(okm::sys(okm::nr_getpid));
+    return kal_ok;
+}
+
+// Every program in the unit, including ones never held as a handle.
+//
+// ⚠️ A group is named by a process identifier, and those are reused: once the
+// program that formed it has ended and the numbers have wrapped, this can reach
+// a different group. That is what this system does, and it is recorded rather
+// than hidden.
+int kal_process_job_terminate(kal_job j) {
+    if (j.h == 0) return kal_err_invalid;
+    // The signal that cannot be declined --- see openkal-linux for the reasoning:
+    // a unit contains programs the caller never held a handle to, so a request any
+    // member may ignore does not terminate the unit.
+    const okm_long r = okm::sys(okm::nr_kill, -static_cast<okm_long>(j.h), 9 /* SIGKILL */);
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+// A group here is a number and not a resource, so there is nothing to release.
+void kal_process_job_close(kal_job) { }
 
 // Releasing the handle does not affect the program. A program that has not been
 // waited for continues, and this environment collects it when the caller exits.
@@ -249,32 +308,11 @@ void kal_process_close(kal_process) { }
 
 // Starting a program whose lifetime is bound to this one's. Version 0.10.
 //
-// ⚠️⚠️ REFUSED HERE, AND THE REFUSAL IS THE HONEST ANSWER RATHER THAN A GAP TO
-// FILL LATER WITH SOMETHING THAT LOOKS LIKE IT.
-//
-// The binding openkal describes has to hold however the caller ends, including
-// when it is killed outright --- and this system has no primitive that arms it
-// from inside the started image. The other kernel does, in one call.
-//
-// ⚠️ What this system offers instead is a WATCH: a context here can be told when
-// another ends and can then act. That is not the same thing and must not be
-// offered as it. A watch needs a live context to notice, so a caller that is
-// killed outright notices nothing and the started program survives --- which is
-// precisely the failure the operation exists to remove. Composing it would move
-// the defect from "refused" to "works except when it matters".
-//
-// ⇒ `KAL_PROCESS_PROP_BOUND_LIFETIME' is not claimed, and a caller that asks
-// first is told before it depends on it.
-int kal_process_spawn_bound(kal_dir, const char*, kal_uintptr,
-                            const char**, const kal_uintptr*, kal_uintptr,
-                            const char**, const kal_uintptr*, kal_uintptr,
-                            const kal_spawn_streams*, kal_process*) {
-    return kal_err_not_supported;
-}
 
 kal_uintptr kal_process_props(void) { return
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS
-  | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR; }
+  | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
+  | KAL_PROCESS_PROP_JOB; }
 
 }

@@ -18,6 +18,35 @@ void record(int argc, char** argv, char** envp) {
 }  // namespace okm
 
 namespace {
+
+// ⚠️⚠️ A PROGRAM ABOVE openkal SHALL NOT BE ENDED BY SOMETHING openkal NEVER TOLD
+// IT ABOUT. openkal defines no signals, and `kal_stream_write' is required to
+// REPORT that the far end of a stream is gone --- while this kernel delivers
+// SIGPIPE, whose default action ends the program instead.
+//
+// ⭐ A C library above answers `signal(SIGPIPE, SIG_IGN)' truthfully, because
+// openkal has no signals and there is nothing for it to set; the program is then
+// killed anyway, by a mechanism no layer between it and here can name. Ignored
+// at this level because this is the only level that can. Found on the other
+// implementation, fixed on both --- a divergence here would be the same defect
+// with a different exit status.
+//
+// ⚠️ Not a policy about signals in general: this is the one an ordinary openkal
+// operation provokes.
+//
+// ⚠️⚠️ AND IT IS NOT FIXED HERE YET, WHICH IS RECORDED RATHER THAN LEFT TO BE
+// DISCOVERED. openkal-linux ignores it in one call. This kernel's `sigaction'
+// takes a `struct __sigaction' carrying a TRAMPOLINE that its C library
+// supplies, and a disposition installed with the wrong shape is the kind of
+// mistake that shows up as a program dying in a way nobody can trace --- which is
+// the defect this note is about, arrived at from the other side.
+//
+// ⇒ It is left until it can be MEASURED on this system. This repository already
+// refuses to claim a facility it has not exercised, and a signal disposition
+// installed by guesswork is exactly that. The consequence meanwhile is stated:
+// a program above this implementation that writes to a stream whose far end has
+// gone is ended by SIGPIPE rather than told, and no layer between it and here
+// can name what happened.
 [[gnu::constructor(101)]] void capture(int argc, char** argv, char** envp) {
     if (okm::g_argv == nullptr) okm::record(argc, argv, envp);
 }
