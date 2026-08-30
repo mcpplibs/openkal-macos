@@ -236,6 +236,18 @@ int kal_process_terminate(kal_process h) {
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
+// This program itself joins or forms a unit --- what `kal_spawn.job' cannot say,
+// because that places a program the caller STARTS and a copy wishing to lead a
+// unit must say so about ITSELF before it replaces itself.
+int kal_process_job_enter(kal_job* j) {
+    if (j == nullptr) return kal_err_invalid;
+    const okm_long join = static_cast<okm_long>(j->h);
+    const okm_long r = okm::sys(nr_setpgid, 0, join);
+    if (okm::failed(r)) return okm::translate(r);
+    if (join == 0) j->h = static_cast<kal_uintptr>(okm::sys(okm::nr_getpid));
+    return kal_ok;
+}
+
 // Every program in the unit, including ones never held as a handle.
 //
 // ⚠️ A group is named by a process identifier, and those are reused: once the
@@ -244,7 +256,10 @@ int kal_process_terminate(kal_process h) {
 // than hidden.
 int kal_process_job_terminate(kal_job j) {
     if (j.h == 0) return kal_err_invalid;
-    const okm_long r = okm::sys(okm::nr_kill, -static_cast<okm_long>(j.h), 15 /* SIGTERM */);
+    // The signal that cannot be declined --- see openkal-linux for the reasoning:
+    // a unit contains programs the caller never held a handle to, so a request any
+    // member may ignore does not terminate the unit.
+    const okm_long r = okm::sys(okm::nr_kill, -static_cast<okm_long>(j.h), 9 /* SIGKILL */);
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
