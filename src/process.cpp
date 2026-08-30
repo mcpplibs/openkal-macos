@@ -229,6 +229,30 @@ void kal_process_channel_close(kal_stream s) {
 // Starting a program that receives exactly the directories named.
 
 // One program, whatever unit it is in --- the unit has its own operation below,
+int kal_process_wait(kal_process h, int* status, int* terminated_by_environment) {
+    if (h.h == 0) return kal_err_invalid;
+    int st = 0;
+    for (;;) {
+        const okm_long r = okm::sys(okm::nr_wait4, static_cast<okm_long>(h.h),
+                                    reinterpret_cast<okm_long>(&st), 0, 0);
+        if (okm::interrupted(r)) continue;
+        if (okm::failed(r)) return okm::translate(r);
+        break;
+    }
+    // The encoding is the kernel's: the low seven bits name the signal that
+    // ended the program and are zero when it ended by returning, in which case
+    // the next eight bits are what it returned.
+    const int signalled = st & 0x7f;
+    if (signalled == 0) {
+        if (status) *status = (st >> 8) & 0xff;
+        if (terminated_by_environment) *terminated_by_environment = 0;
+    } else {
+        if (status) *status = signalled;
+        if (terminated_by_environment) *terminated_by_environment = 1;
+    }
+    return kal_ok;
+}
+
 // so this one's meaning never turns on how the program was started.
 int kal_process_terminate(kal_process h) {
     if (h.h == 0) return kal_err_invalid;
