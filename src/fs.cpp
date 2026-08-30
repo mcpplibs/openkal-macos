@@ -275,6 +275,93 @@ int kal_fs_set_modified(kal_file f, kal_u64 modified_ns) {
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
+// The modification time of a NAME, including a directory. Version 0.10.
+//
+// ⚠️ Expressed as opening the name and using the operation above's own call,
+// because this system's time-setting call takes a descriptor. Opening for
+// READING is enough for it and is what lets a DIRECTORY be reached --- which is
+// the whole reason this declaration exists: the file-taking form takes a
+// `kal_file' and a directory is a `kal_dir', so this interface had no route to
+// a directory's time at all.
+int kal_fs_set_modified_at(kal_dir base, const char* name, kal_uintptr len,
+                           kal_u64 modified_ns) {
+    const int b = okm::unpack(base.h);
+    if (b < 0 || !okm::acceptable(name, len)) return kal_err_invalid;
+    okm::terminated t(name, len); if (!t.ok) return kal_err_invalid;
+
+    const okm_long fd = okm::sys(okm::nr_openat, b,
+                                 reinterpret_cast<okm_long>(t.buf),
+                                 okm::o_rdonly | okm::o_cloexec, 0);
+    if (okm::failed(fd)) return okm::translate(fd);
+
+    okm::kstat64 st{};
+    okm_long r = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
+    if (!okm::failed(r)) {
+        okm::ktimeval times[2];
+        times[0].sec  = st.atime_sec;
+        times[0].usec = static_cast<int>(st.atime_nsec / 1000);
+        times[0].pad  = 0;
+        times[1].sec  = static_cast<okm_i64>(modified_ns / 1000000000u);
+        times[1].usec = static_cast<int>((modified_ns % 1000000000u) / 1000u);
+        times[1].pad  = 0;
+        r = okm::sys(okm::nr_futimes, fd, reinterpret_cast<okm_long>(times));
+    }
+    okm::sys(okm::nr_close, fd);
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+// --- exclusion upon a range of a file ---------------------------------------
+//
+// ⭐ THE OPEN-FILE FORM. This system's oldest record lock is held by the process
+// and is released when that process closes any descriptor for the node; openkal
+// states the holder as the `kal_file', and `F_OFD_*' is exactly that.
+static int lock_range(kal_file f, kal_u64 start, kal_u64 len,
+                      short type, bool wait) {
+    const int fd = okm::unpack(f.h);
+    if (fd < 0) return kal_err_invalid;
+
+    okm::kflock fl{};
+    fl.l_start  = static_cast<okm_i64>(start);
+    fl.l_len    = static_cast<okm_i64>(len);   // zero means to the end, as here
+    fl.l_pid    = 0;
+    fl.l_type   = type;
+    fl.l_whence = okm::seek_set;
+
+    const okm_long cmd = wait ? okm::f_ofd_setlkw : okm::f_ofd_setlk;
+    okm_long r;
+    do {
+        r = okm::sys(okm::nr_fcntl, fd, cmd, reinterpret_cast<okm_long>(&fl));
+    } while (r == -okm::e_intr);
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+int kal_fs_lock(kal_file f, kal_u64 start, kal_u64 len, kal_uintptr mode) {
+    const bool shared    = (mode & KAL_LOCK_SHARED)    != 0;
+    const bool exclusive = (mode & KAL_LOCK_EXCLUSIVE) != 0;
+    if (shared == exclusive) return kal_err_invalid;
+    return lock_range(f, start, len,
+                      shared ? okm::lock_read : okm::lock_write,
+                      (mode & KAL_LOCK_WAIT) != 0);
+}
+
+int kal_fs_unlock(kal_file f, kal_u64 start, kal_u64 len) {
+    return lock_range(f, start, len, okm::lock_unlock, false);
+}
+
+// How much the volume holds, in bytes. `f_bavail' rather than `f_bfree': the
+// question is what THIS program could use.
+int kal_fs_capacity(kal_dir d, kal_u64* total, kal_u64* available) {
+    const int fd = okm::unpack(d.h);
+    if (fd < 0) return kal_err_invalid;
+    okm::kstatfs64 sf{};
+    const okm_long r = okm::sys(okm::nr_fstatfs64, fd, reinterpret_cast<okm_long>(&sf));
+    if (okm::failed(r)) return okm::translate(r);
+    const kal_u64 unit = static_cast<kal_u64>(sf.f_bsize);
+    if (total)     *total     = static_cast<kal_u64>(sf.f_blocks) * unit;
+    if (available) *available = static_cast<kal_u64>(sf.f_bavail) * unit;
+    return kal_ok;
+}
+
 int kal_fs_mkdir(kal_dir base, const char* name, kal_uintptr len) {
     const int b = okm::unpack(base.h);
     if (b < 0 || !okm::acceptable(name, len)) return kal_err_invalid;
@@ -380,8 +467,12 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter,
 // mounts, and `renameat' within one directory is atomic by POSIX.
 kal_uintptr kal_fs_props(kal_dir d) {
     const int fd = okm::unpack(d.h);
+    // Locks and capacity are answered by this system's VFS for every format
+    // beneath it, so they are in the conservative set rather than switched on
+    // by name below.
     const kal_uintptr conservative =
-        KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME;
+        KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME
+        | KAL_FS_PROP_LOCKS | KAL_FS_PROP_CAPACITY;
     if (fd < 0) return 0;
 
     okm::kstatfs64 sf{};

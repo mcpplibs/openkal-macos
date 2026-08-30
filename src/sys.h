@@ -261,6 +261,21 @@ enum : int {
 
 enum : okm_long {
     o_rdonly = 0, o_wronly = 1, o_rdwr = 2,
+
+    // ⚠️ THIS SYSTEM'S VALUES, WHICH ARE NOT THE OTHER ONE'S. A read lock is 1
+    // here and 0 there, and a write lock is 3 here and 1 there --- the BSD
+    // numbering rather than the one the other kernel took. A table copied from
+    // the sibling implementation would compile, run, and take the wrong kind of
+    // lock.
+    lock_read = 1, lock_unlock = 2, lock_write = 3,
+    seek_set = 0,
+
+    // The open-file form, which this system has had since 10.10. The holder is
+    // the open file rather than the process, which is what openkal states.
+    f_ofd_getlk = 92, f_ofd_setlk = 90, f_ofd_setlkw = 91,
+
+    // sysctl: how many processors this machine runs at once.
+    ctl_hw = 6, hw_ncpu = 3,
     o_creat = 0x0200, o_excl = 0x0800, o_trunc = 0x0400, o_append = 0x0008,
     o_directory = 0x100000, o_cloexec = 0x1000000, o_nofollow = 0x0100,
     at_fdcwd = -2, at_removedir = 0x0080, at_symlink_nofollow = 0x0020,
@@ -308,6 +323,17 @@ inline int translate(okm_long r) {
 // consults --- a property that varies between the RESOURCES of an interface is
 // answered by an enquiry taking the resource, and here the resource's format is
 // what the enquiry has to look at.
+// ⚠️ THIS SYSTEM'S `struct flock' PUTS THE POSITIONS FIRST, and the other
+// kernel's puts the kinds first. The two layouts are not interchangeable, and a
+// structure copied across would place a 64-bit offset where two shorts belong.
+struct kflock {
+    okm_i64 l_start;
+    okm_i64 l_len;
+    int     l_pid;
+    short   l_type;
+    short   l_whence;
+};
+
 struct kstatfs64 {
     okm_u32  f_bsize;
     okm_u32  f_iosize;          // int32; the pair fills the first eight bytes

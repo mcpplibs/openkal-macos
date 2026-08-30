@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.9.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.6.1"
+openkal-macos = "0.7.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification

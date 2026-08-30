@@ -247,6 +247,31 @@ int kal_process_terminate(kal_process h) {
 // waited for continues, and this environment collects it when the caller exits.
 void kal_process_close(kal_process) { }
 
+// Starting a program whose lifetime is bound to this one's. Version 0.10.
+//
+// ⚠️⚠️ REFUSED HERE, AND THE REFUSAL IS THE HONEST ANSWER RATHER THAN A GAP TO
+// FILL LATER WITH SOMETHING THAT LOOKS LIKE IT.
+//
+// The binding openkal describes has to hold however the caller ends, including
+// when it is killed outright --- and this system has no primitive that arms it
+// from inside the started image. The other kernel does, in one call.
+//
+// ⚠️ What this system offers instead is a WATCH: a context here can be told when
+// another ends and can then act. That is not the same thing and must not be
+// offered as it. A watch needs a live context to notice, so a caller that is
+// killed outright notices nothing and the started program survives --- which is
+// precisely the failure the operation exists to remove. Composing it would move
+// the defect from "refused" to "works except when it matters".
+//
+// ⇒ `KAL_PROCESS_PROP_BOUND_LIFETIME' is not claimed, and a caller that asks
+// first is told before it depends on it.
+int kal_process_spawn_bound(kal_dir, const char*, kal_uintptr,
+                            const char**, const kal_uintptr*, kal_uintptr,
+                            const char**, const kal_uintptr*, kal_uintptr,
+                            const kal_spawn_streams*, kal_process*) {
+    return kal_err_not_supported;
+}
+
 kal_uintptr kal_process_props(void) { return
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS

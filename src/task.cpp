@@ -170,6 +170,24 @@ int kal_task_wait(const kal_u32* word, kal_u32 expected,
     }
 }
 
+// How many contexts can run at the same moment. Version 0.10.
+//
+// ⚠️ Added because its absence was a WRONG ANSWER and not a refusal:
+// `KAL_TASK_PROP_PARALLEL' says whether and not how many, so a C library above
+// answered 1 with no error and a program sizing a pool of workers got one.
+kal_uintptr kal_task_parallelism(void) {
+    int mib[2] = { okm::ctl_hw, okm::hw_ncpu };
+    int value = 0;
+    okm_uptr length = sizeof value;
+    const okm_long r = okm::sys(okm::nr_sysctl,
+                                reinterpret_cast<okm_long>(mib), 2,
+                                reinterpret_cast<okm_long>(&value),
+                                reinterpret_cast<okm_long>(&length), 0, 0);
+    // Zero is "cannot say", and openkal distinguishes it from one on purpose.
+    if (okm::failed(r) || value <= 0) return 0;
+    return static_cast<kal_uintptr>(value);
+}
+
 int kal_task_wake(const kal_u32* word, kal_uintptr count, kal_uintptr* woken) {
     if (count == 0) { if (woken) *woken = 0; return kal_ok; }
     okm_long operation = okm::ul_compare_and_wait | okm::ulf_no_errno;
