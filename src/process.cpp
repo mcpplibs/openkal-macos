@@ -236,6 +236,18 @@ int kal_process_terminate(kal_process h) {
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
+// ⚠️⚠️ NOT CLAIMED HERE, FOR THE SAME REASON THE SIGPIPE NOTE IN src/env.cpp
+// GIVES. Observing a request to end means installing a disposition, and this
+// kernel's `sigaction' takes a structure carrying a TRAMPOLINE its C library
+// supplies. A disposition installed with the wrong shape shows up as a program
+// dying in a way nobody can trace --- and a facility this repository has not
+// MEASURED is exactly what it refuses to claim elsewhere.
+//
+// ⇒ Null, and KAL_PROCESS_PROP_STOP_REQUESTED unclaimed, so a caller that asks
+// first is told. The other implementation answers it; this one will when it can
+// be exercised here.
+const kal_u32* kal_process_stop_requested(void) { return 0; }
+
 // This program itself joins or forms a unit --- what `kal_spawn.job' cannot say,
 // because that places a program the caller STARTS and a copy wishing to lead a
 // unit must say so about ITSELF before it replaces itself.
