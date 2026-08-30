@@ -332,7 +332,17 @@ static int lock_range(kal_file f, kal_u64 start, kal_u64 len,
     do {
         r = okm::sys(okm::nr_fcntl, fd, cmd, reinterpret_cast<okm_long>(&fl));
     } while (r == -okm::e_intr);
-    return okm::failed(r) ? okm::translate(r) : kal_ok;
+    if (!okm::failed(r)) return kal_ok;
+
+    // ⚠️⚠️ TWO VALUES MEAN ONE THING HERE, AND openkal NAMES ONE OF THEM. The
+    // standard this call comes from reports a range another holder has as
+    // EITHER of two values and leaves the choice to the system. openkal says
+    // `kal_err_again', which a caller polls upon; the other translates to
+    // `permission', which a caller reads as "asking again will not help".
+    // Narrowed to the attempt that does not wait, where alone the two carry
+    // this meaning.
+    if (!wait && (-r == okm::e_acces || -r == okm::e_again)) return kal_err_again;
+    return okm::translate(r);
 }
 
 int kal_fs_lock(kal_file f, kal_u64 start, kal_u64 len, kal_uintptr mode) {
