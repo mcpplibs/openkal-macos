@@ -56,9 +56,9 @@ struct vector {
 };
 
 constexpr okm_long nr_fchdir = 13;
-// openkal 0.11: a started program that forms a job of its own.
+// openkal 0.11: the unit a started program joins.
 constexpr okm_long nr_setpgid = 82;
-constexpr okm_long nr_getpgid = 151;
+
 
 }  // namespace
 
@@ -100,8 +100,7 @@ int kal_process_spawn(const kal_spawn* how,
     // outright, and what this system offers instead is a WATCH, which needs a
     // live context to notice. Composing it would move the defect from "refused"
     // to "works except when it matters".
-    constexpr kal_uintptr can = KAL_SPAWN_OWN_JOB;
-    if (how->flags & ~can) return kal_err_not_supported;
+    if (how->flags != 0) return kal_err_not_supported;
 
     okm::terminated p(path, path_len);
     if (!p.ok) return kal_err_invalid;
@@ -143,7 +142,11 @@ int kal_process_spawn(const kal_spawn* how,
     const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
     const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
 
-    const bool job = (how->flags & KAL_SPAWN_OWN_JOB) != 0;
+    // ⭐ The unit, named here by a process group --- which is to say by whichever
+    // program formed it first. Zero for the first member; a later one is given
+    // the number to join.
+    const okm_long join = how->job ? static_cast<okm_long>(how->job->h) : 0;
+    const bool     unit = how->job != nullptr;
 
     bool is_duplicate = false;
     const okm_long child = okm::duplicate(is_duplicate);
@@ -167,13 +170,17 @@ int kal_process_spawn(const kal_spawn* how,
         // is named from, so this no longer has to serve both.
         okm::sys(nr_fchdir, w);
 
-        if (job) okm::sys(nr_setpgid, 0, 0);
+        if (unit) okm::sys(nr_setpgid, 0, join);
 
         okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
                  reinterpret_cast<okm_long>(args.slots),
                  reinterpret_cast<okm_long>(envs.slots));
         for (;;) okm::sys(okm::nr_exit, 127);
     }
+
+    // Written only after the start succeeded, and only when the unit was new:
+    // the first member's identifier IS the group's.
+    if (unit && join == 0) how->job->h = static_cast<kal_uintptr>(child);
 
     *out = kal_process{ static_cast<kal_uintptr>(child) };
     return kal_ok;
@@ -221,23 +228,28 @@ void kal_process_channel_close(kal_stream s) {
 
 // Starting a program that receives exactly the directories named.
 
-// ⭐ REACHES THE WHOLE JOB WHEN THERE IS ONE, AND THE HANDLE CARRIES NOTHING TO
-// SAY SO. A program started with KAL_SPAWN_OWN_JOB called `setpgid(0, 0)', so its
-// group identifier is its own; one started without it inherited this
-// implementation's, which is some other process. `getpgid(pid) == pid'
-// distinguishes them exactly.
-//
-// ⚠️ Without this the flag would do nothing a caller could see: forming the job
-// matters only because terminating then reaches what the started program itself
-// started.
+// One program, whatever unit it is in --- the unit has its own operation below,
+// so this one's meaning never turns on how the program was started.
 int kal_process_terminate(kal_process h) {
     if (h.h == 0) return kal_err_invalid;
-    const okm_long pid  = static_cast<okm_long>(h.h);
-    const okm_long pgid = okm::sys(nr_getpgid, pid);
-    const okm_long target = (!okm::failed(pgid) && pgid == pid) ? -pid : pid;
-    const okm_long r = okm::sys(okm::nr_kill, target, 15 /* SIGTERM */);
+    const okm_long r = okm::sys(okm::nr_kill, static_cast<okm_long>(h.h), 15 /* SIGTERM */);
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
+
+// Every program in the unit, including ones never held as a handle.
+//
+// ⚠️ A group is named by a process identifier, and those are reused: once the
+// program that formed it has ended and the numbers have wrapped, this can reach
+// a different group. That is what this system does, and it is recorded rather
+// than hidden.
+int kal_process_job_terminate(kal_job j) {
+    if (j.h == 0) return kal_err_invalid;
+    const okm_long r = okm::sys(okm::nr_kill, -static_cast<okm_long>(j.h), 15 /* SIGTERM */);
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+// A group here is a number and not a resource, so there is nothing to release.
+void kal_process_job_close(kal_job) { }
 
 // Releasing the handle does not affect the program. A program that has not been
 // waited for continues, and this environment collects it when the caller exits.
@@ -250,6 +262,6 @@ kal_uintptr kal_process_props(void) { return
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
-  | KAL_PROCESS_PROP_OWN_JOB; }
+  | KAL_PROCESS_PROP_JOB; }
 
 }
