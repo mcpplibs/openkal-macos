@@ -1,5 +1,6 @@
 // Conformance: openkal.process and openkal.task.
 import openkal.process;
+import openkal.macros;
 import openkal.task;
 import openkal.fs;
 import openkal.stream;
@@ -220,6 +221,98 @@ int main() {
 
     kal_task_yield();
     check(kal_task_current() != 0, "the calling context has an identity");
+
+    // --- being told that an end has been requested ---------------------------
+    //
+    // ⚠️⚠️ THIS RAISES THE SIGNAL. Compiling a disposition and never delivering
+    // one proves nothing here: what this operation needs on this kernel is a
+    // TRAMPOLINE, `sa_tramp' in the structure the raw `sigaction' takes, and a
+    // wrong one is not a wrong answer --- it is a program that dies inside the
+    // handler, at an address nobody can attribute. openkal-macos declined to
+    // claim KAL_PROCESS_PROP_STOP_REQUESTED until this check existed, and this
+    // comment is why the order was that way round.
+    //
+    // ⭐ The signal is raised by a shell, which is how a program reaches its own
+    // kernel here without leaving openkal's vocabulary: `kal_process_job_enter'
+    // with a zero unit reports the identifier this program runs under, and that
+    // is the identifier the shell needs.
+    {
+        const kal_u32* word = kal_process_stop_requested();
+        if (word == nullptr) {
+            // Declined, which clause 6.2 permits and KAL_PROCESS_PROP_STOP_REQUESTED
+            // states. Nothing below applies.
+            check((kal_process_props() & kal::macros::KAL_PROCESS_PROP_STOP_REQUESTED_M) == 0,
+                  "an implementation that answers no word does not claim the position");
+        } else {
+            check((kal_process_props() & kal::macros::KAL_PROCESS_PROP_STOP_REQUESTED_M) != 0,
+                  "an implementation that answers a word claims the position");
+            check(*word == 0, "and nothing has asked this program to end yet");
+
+            kal_job unit{};
+            const int entered = kal_process_job_enter(&unit);
+            check(entered == kal_ok, "this program's identifier is reported");
+
+            if (entered == kal_ok && unit.h != 0) {
+                // "kill -TERM <pid>" with the number written out. The shell is
+                // given a moment first so that the wait below is entered rather
+                // than raced past --- the check does not depend on it, because a
+                // word already set makes the wait return at once.
+                char script[64];
+                kal_uintptr n = 0;
+                const char lead[] = "sleep 0.3; kill -TERM ";
+                for (kal_uintptr i = 0; i < sizeof(lead) - 1; ++i) script[n++] = lead[i];
+                char digits[24]; int d = 24;
+                kal_uintptr v = unit.h;
+                if (v == 0) digits[--d] = '0';
+                while (v > 0) { digits[--d] = static_cast<char>('0' + v % 10); v /= 10; }
+                while (d < 24) script[n++] = digits[d++];
+                script[n] = 0;
+
+                // Located by asking, as above --- the lambda that does it is
+                // scoped to the block above, and duplicating four lines is
+                // better than widening something for one caller.
+                const char* sh_paths[] = { "bin/sh", "usr/bin/sh" };
+                const kal_uintptr sh_lens[] = { 6, 10 };
+                int sh = -1;
+                for (int i = 0; i < 2 && sh < 0; ++i) {
+                    kal_node_info info{}; info.self_size = sizeof info;
+                    if (kal_fs_info(slash, sh_paths[i], sh_lens[i], 0,
+                                    kal::fs::field::kind, &info) != kal_ok) continue;
+                    if (info.kind != kal_node_absent) sh = i;
+                }
+                check(sh >= 0, "a shell is found to raise the signal");
+
+                kal_process k{};
+                const kal_spawn how{ slash, slash, nullptr, nullptr, 0, 0 };
+                const char*       kargv[] = { "sh", "-c", script };
+                const kal_uintptr klens[] = { 2, 2, n };
+                int krc = kal_err_invalid;
+                if (sh >= 0)
+                    krc = kal_process_spawn(&how, sh_paths[sh], sh_lens[sh],
+                                            kargv, klens, 3,
+                                            nullptr, nullptr, 0, nullptr, &k);
+                check(krc == kal_ok, "the program that raises the signal starts");
+
+                if (krc == kal_ok) {
+                    // Up to five seconds, in bounded waits upon the word itself
+                    // --- which is the use the word was specified for.
+                    for (int i = 0; i < 50 && *word == 0; ++i)
+                        kal_task_wait(word, 0u, 100ull * 1000 * 1000);
+
+                    check(*word != 0, "the program is told that its end was requested");
+
+                    // ⭐ AND IT IS STILL RUNNING, which is the half a compiled
+                    // disposition cannot show. Reaching this line is the proof:
+                    // a program that died in the handler never gets here.
+                    check(true, "and it is still running, having survived delivery");
+
+                    int status = -1, terminated = -1;
+                    kal_process_wait(k, &status, &terminated);
+                    kal_process_close(k);
+                }
+            }
+        }
+    }
 
     const char ok[] = "openkal-macos: process and task conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);

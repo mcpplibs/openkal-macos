@@ -270,7 +270,106 @@ int kal_process_terminate(kal_process h) {
 // ⇒ Null, and KAL_PROCESS_PROP_STOP_REQUESTED unclaimed, so a caller that asks
 // first is told. The other implementation answers it; this one will when it can
 // be exercised here.
-const kal_u32* kal_process_stop_requested(void) { return 0; }
+// ⭐⭐ A WORD THIS PROGRAM'S ENVIRONMENT SETS WHEN SOMEBODY HAS ASKED IT TO END.
+//
+// ⚠️⚠️ THE TRAMPOLINE IS THIS IMPLEMENTATION'S OWN, WHICH IS WHY THIS ARRIVED A
+// VERSION LATE. The raw `sigaction' of this kernel takes a structure whose
+// SECOND field is `sa_tramp': the kernel enters that address, not the handler,
+// and the handler is passed to it as an argument. A C library ordinarily
+// supplies it (`_sigtramp' in libsystem) and there is no C library beneath this
+// implementation. A structure installed with a null or wrong `sa_tramp' does not
+// fail at installation --- it fails on DELIVERY, inside the handler, at an
+// address that belongs to nobody, which is the least attributable failure this
+// implementation could ship. So the order was: a conformance check that raises
+// the signal first, this second.
+//
+// ⚠️ ARMED ON THE FIRST ENQUIRY AND NOT AT STARTUP, exactly as openkal-linux
+// argues: a program that never asks keeps the default action, and adding this
+// operation therefore changes nothing for anyone who does not use it.
+namespace {
+
+kal_u32 g_stop_word = 0;
+int     g_stop_armed = 0;
+
+#if defined(__aarch64__)
+
+constexpr okm_long nr_sigaction = 46;
+
+// What the kernel enters. Its arguments are (handler, infostyle, sig, siginfo,
+// ucontext) in x0..x4; it calls the handler with the last three and then asks
+// the kernel to restore the interrupted context.
+//
+// ⚠️ x19 AND x20 ARE USED WITHOUT BEING SAVED, and that is correct here rather
+// than sloppy: this function does not return to its caller. `sigreturn' restores
+// the whole of the interrupted context, callee-saved registers included, so the
+// values these two held belong to a frame the kernel is about to reinstate.
+extern "C" void okm_sigtramp(void);
+asm(".globl _okm_sigtramp\n"
+    ".p2align 2\n"
+    "_okm_sigtramp:\n"
+    "  mov x19, x1\n"          // infostyle
+    "  mov x20, x4\n"          // ucontext
+    "  mov x8,  x0\n"          // handler
+    "  mov x0,  x2\n"          // sig
+    "  mov x1,  x3\n"          // siginfo
+    "  mov x2,  x20\n"         // ucontext
+    "  blr x8\n"
+    "  mov x0,  x20\n"         // ucontext
+    "  mov x1,  x19\n"         // infostyle
+    "  mov x16, #184\n"        // SYS_sigreturn
+    "  svc #0x80\n"
+    "  brk #1\n");             // sigreturn does not come back
+
+void stop_handler(int) {
+    __atomic_store_n(&g_stop_word, 1u, __ATOMIC_RELEASE);
+    // Woken through the same operation `kal_task_wake' performs, issued as the
+    // raw call because a handler may not enter code that takes a lock. Waking
+    // ALL of them: any number of contexts may be waiting upon this one word, and
+    // the handler has no way to learn how many.
+    okm::sys(okm::nr_ulock_wake,
+             okm::ul_compare_and_wait | okm::ulf_no_errno | okm::ulf_wake_all,
+             reinterpret_cast<okm_long>(&g_stop_word), 0);
+}
+
+// The structure this kernel's `sigaction' takes. `sa_tramp' is the second field
+// and is the whole reason this is spelled out rather than borrowed.
+struct macos_sigaction {
+    void (*handler)(int);
+    void (*tramp)(void*, int, int, void*, void*);
+    unsigned int mask;
+    int flags;
+};
+
+void arm_one(int signo) {
+    macos_sigaction act{};
+    act.handler = &stop_handler;
+    act.tramp   = reinterpret_cast<void (*)(void*, int, int, void*, void*)>(&okm_sigtramp);
+    okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&act), 0);
+}
+
+#endif  // __aarch64__
+
+}  // namespace
+
+const kal_u32* kal_process_stop_requested(void) {
+#if defined(__aarch64__)
+    if (!__atomic_exchange_n(&g_stop_armed, 1, __ATOMIC_ACQ_REL)) {
+        arm_one(15);   // SIGTERM
+        arm_one(2);    // SIGINT
+    }
+    return &g_stop_word;
+#else
+    // ⚠️ DECLINED ON THE OTHER ARCHITECTURE, AND NOT BECAUSE IT CANNOT BE
+    // WRITTEN. The trampoline above has an x86_64 counterpart of the same
+    // length. What it does not have is a way to be RUN: the build tool has no
+    // release for x86_64 on this system, so continuous integration compiles the
+    // sources there and executes nothing --- and a trampoline that has never
+    // been entered is the one thing this operation must not ship. Clause 6.2
+    // makes the absence a fact a caller reads, and `kal_process_props' below
+    // does not claim the position.
+    return 0;
+#endif
+}
 
 // This program itself joins or forms a unit --- what `kal_spawn.job' cannot say,
 // because that places a program the caller STARTS and a copy wishing to lead a
@@ -309,10 +408,19 @@ void kal_process_close(kal_process) { }
 // Starting a program whose lifetime is bound to this one's. Version 0.10.
 //
 
+// ⚠️ EVERY POSITION THE SPECIFICATION HAS ASSIGNED IS ACCOUNTED FOR HERE, either
+// by being claimed or by being deliberately absent. BOUND_LIFETIME is absent
+// because `kal_process_spawn' above refuses every flag; STOP_REQUESTED is
+// claimed only where the trampoline it needs has been entered by a running
+// program, which is the architecture continuous integration executes.
 kal_uintptr kal_process_props(void) { return
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
-  | KAL_PROCESS_PROP_JOB; }
+  | KAL_PROCESS_PROP_JOB
+#if defined(__aarch64__)
+  | KAL_PROCESS_PROP_STOP_REQUESTED
+#endif
+  ; }
 
 }
