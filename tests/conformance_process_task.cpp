@@ -187,6 +187,57 @@ int main() {
                   "the started program observes the argument vector the caller supplied, unaltered");
             kal_process_close(r);
         }
+
+        // ⭐⭐ A PROGRAM THAT NEEDS AN INTERPRETER, WHICH openkal-linux COULD NOT
+        // START AND NOBODY HAD MEASURED ANYWHERE.
+        //
+        // There, `execveat' with a directory descriptor gives the kernel the
+        // name as `/dev/fd/<dirfd>/<name>' --- and the kernel hands THAT to the
+        // interpreter to open, after the replacement, by which time a
+        // close-on-exec descriptor is gone. Every `#!' script was unstartable on
+        // every architecture, and it was found only because a foreign binary
+        // needs an interpreter too and so aarch64 failed loudly.
+        //
+        // ⚠️ THIS IMPLEMENTATION IS EXPECTED TO PASS AND IS CHECKED ANYWAY. It
+        // has no `execveat': it enters the directory and calls `execve' with a
+        // whole path, so the kernel never has a name the interpreter cannot
+        // reopen. That is a reason to believe it works, and believing was how
+        // the other one went unmeasured for as long as it did.
+        {
+            const char* mk =
+                "printf '#!/bin/sh\\nexit 0\\n' > /tmp/okm-interp.sh && chmod 755 /tmp/okm-interp.sh";
+            kal_uintptr mk_len = 0; while (mk[mk_len]) ++mk_len;
+            kal_process m{};
+            const char*       mav[] = { "sh", "-c", mk };
+            const kal_uintptr mlen[] = { 2, 2, mk_len };
+            int made = kal_err_invalid;
+            if (sh >= 0)
+                made = kal_process_spawn(&how, sh_paths[sh], sh_lens[sh], mav, mlen, 3,
+                                         nullptr, nullptr, 0, nullptr, &m);
+            if (made == kal_ok) {
+                int ms = -1, mt = -1;
+                kal_process_wait(m, &ms, &mt);
+                kal_process_close(m);
+            }
+            check(made == kal_ok, "a shell makes an executable script to start");
+
+            kal_process s{};
+            const char*       sav[] = { "okm-interp.sh" };
+            const kal_uintptr slen[] = { 13 };
+            const int se = kal_process_spawn(&how, "tmp/okm-interp.sh", 17,
+                                             sav, slen, 1,
+                                             nullptr, nullptr, 0, nullptr, &s);
+            if (se == kal_ok) {
+                int ss = -1, st2 = -1;
+                kal_process_wait(s, &ss, &st2);
+                check(ss == 0 && st2 == 0,
+                      "a program that needs an interpreter starts, and runs");
+                say("  interpreter: a #! script started and ran\n");
+                kal_process_close(s);
+            } else {
+                check(false, "a program that needs an interpreter starts");
+            }
+        }
     }
 
     // A name that ascends is refused here as it is in the file system.
