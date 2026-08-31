@@ -340,11 +340,17 @@ struct macos_sigaction {
     int flags;
 };
 
-void arm_one(int signo) {
+// ⚠️ THE RESULT IS EXAMINED, AND THE FUNCTION EXISTS TO RETURN IT. An
+// installation that failed would leave a word that can never change, and
+// answering the caller with one is `nothing here reports success having done
+// nothing' in its exact form: the program would ask whether its end had been
+// requested, be told no, and go on being told no after it had been.
+bool arm_one(int signo) {
     macos_sigaction act{};
     act.handler = &stop_handler;
     act.tramp   = reinterpret_cast<void (*)(void*, int, int, void*, void*)>(&okm_sigtramp);
-    okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&act), 0);
+    return !okm::failed(okm::sys(nr_sigaction, signo,
+                                 reinterpret_cast<okm_long>(&act), 0));
 }
 
 #endif  // __aarch64__
@@ -353,11 +359,20 @@ void arm_one(int signo) {
 
 const kal_u32* kal_process_stop_requested(void) {
 #if defined(__aarch64__)
-    if (!__atomic_exchange_n(&g_stop_armed, 1, __ATOMIC_ACQ_REL)) {
-        arm_one(15);   // SIGTERM
-        arm_one(2);    // SIGINT
+    // ⚠️ THREE STATES AND NOT TWO: not yet tried, armed, refused. A second
+    // caller must be told what the first found rather than arming again --- and
+    // must not be told `not yet tried' while the first is still inside the
+    // installation.
+    int state = __atomic_load_n(&g_stop_armed, __ATOMIC_ACQUIRE);
+    if (state == 0) {
+        // SIGTERM is the one `kal_process_terminate' sends here; SIGINT is what
+        // an interactive stream delivers. Both are requests to end, which is the
+        // whole of what this word reports.
+        const bool ok = arm_one(15) && arm_one(2);
+        state = ok ? 1 : -1;
+        __atomic_store_n(&g_stop_armed, state, __ATOMIC_RELEASE);
     }
-    return &g_stop_word;
+    return state == 1 ? &g_stop_word : nullptr;
 #else
     // ⚠️ DECLINED ON THE OTHER ARCHITECTURE, AND NOT BECAUSE IT CANNOT BE
     // WRITTEN. The trampoline above has an x86_64 counterpart of the same
@@ -419,7 +434,14 @@ kal_uintptr kal_process_props(void) { return
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
   | KAL_PROCESS_PROP_JOB
 #if defined(__aarch64__)
-  | KAL_PROCESS_PROP_STOP_REQUESTED
+  // ⚠️ AND IT AGREES WITH `kal_process_stop_requested', WHICH IS A REQUIREMENT
+  // AND NOT A COURTESY: the header defines null there as the absence this
+  // position reports, so the two cannot disagree. It is read and never armed
+  // --- asking what an implementation can do must not install a disposition ---
+  // so this claims the position until an installation has actually been refused,
+  // and stops claiming it afterwards.
+  | (__atomic_load_n(&g_stop_armed, __ATOMIC_ACQUIRE) == -1
+        ? 0u : KAL_PROCESS_PROP_STOP_REQUESTED)
 #endif
   ; }
 
