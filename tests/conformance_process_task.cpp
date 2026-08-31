@@ -240,7 +240,9 @@ int main() {
         const kal_u32* word = kal_process_stop_requested();
         if (word == nullptr) {
             // Declined, which clause 6.2 permits and KAL_PROCESS_PROP_STOP_REQUESTED
-            // states. Nothing below applies.
+            // states. Nothing below applies --- and the log says which of the two
+            // this run was, for the reason given at the observation further down.
+            say("  stop-request: declined, and the position is not claimed\n");
             check((kal_process_props() & kal::macros::KAL_PROCESS_PROP_STOP_REQUESTED_M) == 0,
                   "an implementation that answers no word does not claim the position");
         } else {
@@ -304,7 +306,16 @@ int main() {
                     // ⭐ AND IT IS STILL RUNNING, which is the half a compiled
                     // disposition cannot show. Reaching this line is the proof:
                     // a program that died in the handler never gets here.
-                    check(true, "and it is still running, having survived delivery");
+                    //
+                    // ⚠️⚠️ SAID ALOUD, AND EVERY OTHER CHECK HERE IS SILENT WHEN
+                    // IT HOLDS. That convention cannot serve this one. Each
+                    // observation above is skipped rather than failed when its
+                    // precondition is absent --- no root, no word, no shell ---
+                    // so a green run is consistent BOTH with a trampoline that
+                    // was entered and returned and with a block that never ran.
+                    // Those are the two outcomes this check exists to tell
+                    // apart, and only a line in the log tells them apart.
+                    if (*word != 0) say("  stop-request: told, and still running\n");
 
                     int status = -1, terminated = -1;
                     kal_process_wait(k, &status, &terminated);
