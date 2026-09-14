@@ -227,19 +227,27 @@ jobs:
       #
       # The step is openkal-linux's, unchanged, including the assertion that
       # every suite ran: a suite that discovered nothing reports success.
+      # ⚠️ AND IN BOTH PROFILES. Until 0.9.1 every program built with --release
+      # faulted before `main': the system-call wrapper declared x1 an input
+      # only, this kernel returns a second value there, and an optimizing
+      # compiler kept an argument in it across the call. The dev profile keeps
+      # nothing in a register across a call and never showed it.
       - name: This package's own tests
         run: |
           set -euo pipefail
-          mcpp test 2>&1 | tee tests.log
+          for profile in dev release; do
+          echo "--- profile $profile"
+          mcpp test --profile "$profile" 2>&1 | tee tests.log
           # The list is derived from the files present rather than written out
           # here: a hand-written list names the suites that existed when it was
           # written, and one added afterwards escapes the assertion silently.
           missing=0
           for f in tests/*.cpp; do
             name="$(basename "$f" .cpp)"
-            grep -q "^$name \.\.\. ok" tests.log || { echo "did not run or did not pass: $name" >&2; missing=1; }
+            grep -q "^$name \.\.\. ok" tests.log || { echo "did not run or did not pass: $name ($profile)" >&2; missing=1; }
           done
           test "$missing" -eq 0
+          done
 
       # The other architecture, as far as this system allows it to be reached.
       #
@@ -279,7 +287,11 @@ jobs:
       # library through a macro.
       - name: The objects reference nothing of a C library but the two named
         run: |
-          rm -rf target && mcpp build --features standalone
+          # Both profiles: an optimizing compiler turns a counting loop into
+          # `strlen', which the dev profile never shows (hence -fno-builtin).
+          for profile in dev release; do
+          echo "--- profile $profile"
+          rm -rf target && mcpp build --features standalone --profile "$profile"
           objs="$(find target -path '*/obj/*' -name '*.o' ! -name '*.m.o' ! -name 'mcpp_*')"
           test -n "$objs" || { echo "no objects were found; the check would pass vacuously" >&2; exit 1; }
 
@@ -326,7 +338,8 @@ jobs:
             done
           done
           test "$bad" -eq 0
-          echo "the implementation reaches nothing of a C library but the two names that are named"
+          echo "the implementation reaches nothing of a C library but the two names that are named ($profile)"
+          done
 
       # A checker is only useful if it fails when it should.
       - name: The independence check detects a dependence
