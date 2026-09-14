@@ -54,9 +54,16 @@ inline okm_long sys(okm_long n, okm_long a = 0, okm_long b = 0, okm_long c = 0,
     register okm_long x4 __asm__("x4") = e;
     register okm_long x5 __asm__("x5") = f;
     okm_long failed;
-    __asm__ __volatile__("svc #0x80\n\tcset %1, cs"
-                         : "+r"(x0), "=r"(failed)
-                         : "r"(x16), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+    // ⚠️⚠️ THE SECOND REGISTER COMES BACK TOO, AND UNTIL 0.9.1 IT WAS DECLARED AN
+    // INPUT ONLY. This kernel returns a second value in x1 from every call ---
+    // the two calls below read it --- and writes it whether or not the call has
+    // one. Declared as an input, x1 was assumed to survive, and an optimizing
+    // compiler kept the first argument there: the preopen table stored the
+    // address of "/" from x1 after `openat' had cleared it, and every program
+    // built with --release faulted in `kal_fs_preopen' before `main'.
+    __asm__ __volatile__("svc #0x80\n\tcset %2, cs"
+                         : "+r"(x0), "+r"(x1), "=r"(failed)
+                         : "r"(x16), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
                          : "memory", "cc");
     return failed ? -x0 : x0;
 }
@@ -71,9 +78,10 @@ inline okm_long sys(okm_long n, okm_long a = 0, okm_long b = 0, okm_long c = 0,
     register okm_long r10 __asm__("r10") = d;
     register okm_long r8  __asm__("r8")  = e;
     register okm_long r9  __asm__("r9")  = f;
+    // The second value comes back in rdx, as x1 above: an output as well.
     __asm__ __volatile__("syscall"
-                         : "=a"(r), "=@ccc"(failed)
-                         : "a"(n | 0x2000000L), "D"(a), "S"(b), "d"(c),
+                         : "=a"(r), "+d"(c), "=@ccc"(failed)
+                         : "a"(n | 0x2000000L), "D"(a), "S"(b),
                            "r"(r10), "r"(r8), "r"(r9)
                          : "rcx", "r11", "memory", "cc");
     return failed ? -r : r;
