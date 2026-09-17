@@ -19,7 +19,7 @@
 # it runs. Verified 2026-08-22 by linking 1356 objects with ld64.lld ON LINUX,
 # producing a Mach-O arm64 executable whose only dependency is that library.
 #
-# ⚠️ Linking is not running. A program for the 64-bit ARM variant of this system
+# Linking is not running. A program for the 64-bit ARM variant of this system
 # must also be signed, if only ad hoc, before the kernel will start it. That
 # step belongs to whoever produces the artifact, and it is verified on a machine
 # of that system rather than here.
@@ -28,7 +28,7 @@ targets:         [ arm64-macos, x86_64-macos ]
 install-name:    '/usr/lib/libSystem.B.dylib'
 current-version: 1351.0.0
 #
-# ⚠️ THREE NAMES, AND THE THIRD IS OF A DIFFERENT KIND.
+# THREE NAMES, AND THE THIRD IS OF A DIFFERENT KIND.
 #
 # The first two are names this implementation CALLS, and the enumeration above
 # found them. `dyld_stub_binder' is not called by anything here or in any source:

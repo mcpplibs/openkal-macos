@@ -83,7 +83,7 @@ int main() {
     }
     check(found, "enumeration finds the entry");
 
-    // ⚠️ The property the interface exists to have: a name that ascends is
+    // The property the interface exists to have: a name that ascends is
     // refused, so a program cannot leave the directory it was given.
     kal_dir escape{};
     check(kal_fs_open_dir(d, "..", 2, &escape) != kal_ok, "an ascending name is refused");

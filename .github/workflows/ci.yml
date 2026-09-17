@@ -74,7 +74,7 @@ jobs:
       - name: Install mcpp
         run: |
           xlings update
-          # ⚠️ THE PIN MAY NAME THE RELEASE THIS RUN IS VALIDATING, which does
+          # THE PIN MAY NAME THE RELEASE THIS RUN IS VALIDATING, which does
           # not exist yet — that is the whole point of MCPP_SOURCE_REF. Bootstrap
           # from whatever the index has; the step below replaces it with the
           # build under review, and the pin is what an ordinary run tests.
@@ -83,7 +83,7 @@ jobs:
           else
             xlings install "mcpp@$MCPP_VERSION" -y -g
           fi
-          # ⚠️⚠️ TRANSITION: GIVE THE BOOTSTRAP THE glibc ITS BINDING NAMES.
+          # TRANSITION: GIVE THE BOOTSTRAP THE glibc ITS BINDING NAMES.
           #
           # `xim:glibc`'s `latest` moved from `2.44` to `2.44.2`. A payload
           # directory is named after the version a request RESOLVED to, while a
@@ -95,13 +95,13 @@ jobs:
           #     error: selected RuntimeBinding glibc@2.44 requires payload
           #            '…/xpkgs/xim-x-glibc/2.44', but it is not installed
           #
-          # ⚠️ On every NEW machine and on none that already existed, which is why
+          # On every NEW machine and on none that already existed, which is why
           # it is invisible from a developer's own. Measured on `main` as readily
           # as on any branch — the index records the same failure verbatim in
           # `pkgs/g/glibc.lua` and states the rule it broke: "The index is DATA
           # and the client is a PROGRAM: the consumer ships first."
           #
-          # ⭐ REMOVE THIS once a released mcpp resolves it. `mcpp 2026.8.27.1`
+          # REMOVE THIS once a released mcpp resolves it. `mcpp 2026.8.27.1`
           # accepts an installed payload whose version REFINES the requested one
           # (`payload_dir_for_version`), so a bootstrap from it needs nothing
           # here. Until then the missing payload is simply installed.
@@ -113,13 +113,13 @@ jobs:
           fi
           mcpp --version
           mcpp self config --mirror GLOBAL
-          # ⭐⭐ CROSS-VALIDATION: BUILD THE mcpp UNDER REVIEW AND USE THAT ONE.
+          # CROSS-VALIDATION: BUILD THE mcpp UNDER REVIEW AND USE THAT ONE.
           #
           # Empty in the ordinary run, so this job keeps testing the RELEASED
           # mcpp the pin above names. Set it — `workflow_dispatch` input, or the
           # repository variable — and the same job runs against that source.
           #
-          # ⚠️ THIS EXISTS BECAUSE THE ORDER USED TO BE WRONG. Several mcpp
+          # THIS EXISTS BECAUSE THE ORDER USED TO BE WRONG. Several mcpp
           # releases went out green and only then turned this ecosystem red: the
           # engine's own CI cannot see a defect that appears only in a real
           # dependency graph, and this repository could not see the engine until
@@ -132,7 +132,7 @@ jobs:
             [ -d "$src" ] || git clone --quiet --depth 1 \
               --branch "$MCPP_SOURCE_REF" \
               https://github.com/mcpp-community/mcpp.git "$src"
-            # ⚠️ THE CLONE'S OWN WORKSPACE PIN MUST NOT DECIDE WHICH mcpp
+            # THE CLONE'S OWN WORKSPACE PIN MUST NOT DECIDE WHICH mcpp
             # BUILDS IT. `.xlings.json` at mcpp's root pins the mcpp that
             # compiles mcpp, and that pin does not move when mcpp is released —
             # so a build inside the checkout obeys it and tries to install a
@@ -145,7 +145,7 @@ jobs:
             # above, which is exactly what removing the file leaves.
             rm -f "$src/.xlings.json"
             ( cd "$src" && mcpp build --release )
-            # ⚠️ BOTH SPELLINGS, AND NO `-perm`. The matrix reaches Windows and
+            # BOTH SPELLINGS, AND NO `-perm`. The matrix reaches Windows and
             # macOS runners too: on Windows the artefact is `mcpp.exe`, and
             # `-perm -u+x` is not a question that filesystem answers the way this
             # expects. Measured: `Finished release [optimized] in 173.44s`
@@ -159,7 +159,7 @@ jobs:
                     \( -name mcpp -o -name mcpp.exe \) | head -1)
             [ -n "$built" ] || { echo "::error::mcpp did not build from $MCPP_SOURCE_REF"; exit 1; }
             echo "$(cd "$(dirname "$built")" && pwd)" >> "$GITHUB_PATH"
-            # ⚠️ Reported, because a PATH entry that does not win looks exactly
+            # Reported, because a PATH entry that does not win looks exactly
             # like one that does until something built with the wrong engine.
             echo "under review: $("$built" --version)  (from $MCPP_SOURCE_REF)"
           fi
@@ -182,7 +182,7 @@ jobs:
         run: |
           bash .spec/tools/run-conformance.sh openkal-macos . full,optional
 
-      # ⚠️⚠️ CLONING THE SPECIFICATION IS NOT THE SAME AS BUILDING AGAINST IT.
+      # CLONING THE SPECIFICATION IS NOT THE SAME AS BUILDING AGAINST IT.
       #
       # `.spec` is cloned at the top of this job and consumed by the script
       # above, which substitutes this manifest itself and RESTORES IT ON EXIT
@@ -195,7 +195,7 @@ jobs:
       #     index ... the index is current, so this name is either wrong or not
       #     published yet
       #
-      # ⭐⭐ THE UNIT IS THE STEP, NOT THE JOB, AND NOT THE REPOSITORY. Measured
+      # THE UNIT IS THE STEP, NOT THE JOB, AND NOT THE REPOSITORY. Measured
       # 2026-08-28 across the eight repositories of this ecosystem: eight jobs
       # in four of them had this shape. An audit that asked "does this job
       # substitute?" passed this one, because it does --- and then gives it
@@ -204,7 +204,7 @@ jobs:
       - name: Point at the specification's working tree
         run: |
           set -euo pipefail
-          # ⚠️ NOT `sed -i'. This step runs on macOS and on Windows too, and
+          # NOT `sed -i'. This step runs on macOS and on Windows too, and
           # BSD sed requires an argument to -i that GNU sed refuses. A temporary
           # file is the spelling that holds on all three.
           subst() {   # subst <file> <relative-path-to-the-specification>
@@ -227,7 +227,7 @@ jobs:
       #
       # The step is openkal-linux's, unchanged, including the assertion that
       # every suite ran: a suite that discovered nothing reports success.
-      # ⚠️ AND IN BOTH PROFILES. Until 0.9.1 every program built with --release
+      # AND IN BOTH PROFILES. Until 0.9.1 every program built with --release
       # faulted before `main': the system-call wrapper declared x1 an input
       # only, this kernel returns a second value there, and an optimizing
       # compiler kept an argument in it across the call. The dev profile keeps
@@ -309,7 +309,7 @@ jobs:
           #   __stack_chk_*                     emitted by the toolchain around
           #     a frame it protects; supplied by the program, not called by this
           #     implementation.
-          #   section$start$… / section$end$…  ⭐ THE LINKER'S, NOT A LIBRARY'S.
+          #   section$start$… / section$end$…  THE LINKER'S, NOT A LIBRARY'S.
           #     `src/unwind.cpp` answers `_dyld_find_unwind_sections` out of the
           #     boundaries of its own image's `__TEXT,__eh_frame` and
           #     `__TEXT,__unwind_info`, and this object format states those as

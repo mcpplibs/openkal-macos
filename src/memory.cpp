@@ -21,7 +21,7 @@
 namespace {
 
 
-// ⚠️⚠️ THE PAGE IS ASKED FOR, NOT ASSUMED. It was the constant 4096, and this
+// THE PAGE IS ASKED FOR, NOT ASSUMED. It was the constant 4096, and this
 // system's own hardware has two page sizes: four kilobytes on one architecture
 // and SIXTEEN on the other. A mapping rounded to four kilobytes on a machine
 // whose page is sixteen is rounded up again by the kernel --- so allocation

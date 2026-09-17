@@ -9,13 +9,13 @@
 // mapping that is writable and executable at once is refused here, and the
 // interface states the narrower contract for exactly that reason.
 //
-// ⚠️⚠️ CLAUSE 6.5 NAMES THIS SYSTEM AND THIS INTERFACE IN TERMS, and what it
+// CLAUSE 6.5 NAMES THIS SYSTEM AND THIS INTERFACE IN TERMS, and what it
 // says is that availability may be settled by how the artifact is PRODUCED ---
 // a signed declaration applied after the link, by whoever produces the
 // artifact. That would make the interface a feature of this package rather than
 // a part of it.
 //
-// ⭐ THIS IMPLEMENTATION PROVIDES IT UNCONDITIONALLY, AND THE READING IS A
+// THIS IMPLEMENTATION PROVIDES IT UNCONDITIONALLY, AND THE READING IS A
 // MEASUREMENT RATHER THAN A CHOICE. The declaration clause 6.5 describes is
 // what a program needs to obtain memory that is writable and executable AT THE
 // SAME TIME --- `MAP_JIT' and the pair of calls that flip one region between
@@ -23,13 +23,13 @@
 // then made executable and no longer writable, which is the whole of what this
 // interface offers.
 //
-// ⭐ THE SPECIFICATION'S OWN SUITE IS WHERE THAT DISTINCTION STOPS BEING AN
+// THE SPECIFICATION'S OWN SUITE IS WHERE THAT DISTINCTION STOPS BEING AN
 // ARGUMENT --- `conformance/src/sections/exec.cpp' in the openkal repository,
 // which this package runs through `run-conformance.sh openkal-macos .
 // full,optional'. It reserves a region, writes an instruction sequence into it,
 // publishes it, CALLS it, and compares what it returned.
 //
-// ⚠️ An earlier version of this comment named `tests/conformance_exec.cpp',
+// An earlier version of this comment named `tests/conformance_exec.cpp',
 // which is in this repository and does not exist. A comment naming the place a
 // question is answered is a promise, and one pointing at nothing sends a reader
 // to look and leaves them unable to tell whether the check is missing or the
@@ -40,7 +40,7 @@
 // resolution, together with whatever produces the artifact. The question is
 // answered by the system rather than by this comment.
 //
-// ⚠️⚠️ THE INSTRUCTION CACHE IS NOT INVALIDATED HERE, AND ONE VERSION OF THIS
+// THE INSTRUCTION CACHE IS NOT INVALIDATED HERE, AND ONE VERSION OF THIS
 // FILE DID INVALIDATE IT. THE MEASUREMENT IS WHY IT DOES NOT.
 //
 // A processor with separate caches for data and instructions has just had bytes
@@ -50,7 +50,7 @@
 // add, on the reading that it expands to nothing on x86_64 and to the
 // maintenance sequence INLINE on aarch64.
 //
-// ⚠️ The second half of that reading was false, and this package's own
+// The second half of that reading was false, and this package's own
 // independence check said so within the hour:
 //
 //     target/aarch64-macos/…/obj/exec.o references a symbol it must not:
@@ -61,7 +61,7 @@
 // from a program that carries no other runtime and the check exists to keep it
 // that way, so acquiring that dependency is not available here.
 //
-// ⭐ THE SPECIFICATION PLACES THE MAINTENANCE UPON THE PROGRAM in any case --- the
+// THE SPECIFICATION PLACES THE MAINTENANCE UPON THE PROGRAM in any case --- the
 // conformance suite performs it itself and says why: the program is the party
 // that knows which bytes it wrote. So nothing is lost by not doing it, and what
 // the three implementations now share is a rule rather than an accident:
@@ -75,7 +75,7 @@
 
 namespace {
 
-// ⚠️ THE GRANULARITY IS ASKED FOR RATHER THAN ASSUMED. This file held
+// THE GRANULARITY IS ASKED FOR RATHER THAN ASSUMED. This file held
 // `constexpr okm_uptr kPage = 4096' and a comment arguing that rounding to the
 // smaller of this system's two page sizes was still correct because the kernel
 // rounds up. The argument holds for the reservation and fails for the release:
@@ -89,7 +89,7 @@ okm_uptr granularity() {
     return static_cast<okm_uptr>(kal_memory_granularity());
 }
 
-// ⭐⭐ WHETHER THIS SYSTEM GRANTS EXECUTABLE MEMORY IS MEASURED, NOT ARGUED.
+// WHETHER THIS SYSTEM GRANTS EXECUTABLE MEMORY IS MEASURED, NOT ARGUED.
 //
 // This file previously carried both answers. One comment reasoned that the
 // write-then-publish order is the case an entitlement is NOT needed for and
@@ -98,7 +98,7 @@ okm_uptr granularity() {
 // produced with an entitlement and returned zero. The operations behaved as
 // the first said and the capability word said the second.
 //
-// ⚠️ AND THE DISAGREEMENT WAS INVISIBLE UNTIL A CONSUMER COULD READ THE WORD.
+// AND THE DISAGREEMENT WAS INVISIBLE UNTIL A CONSUMER COULD READ THE WORD.
 // A statically-linked caller never asked: it linked the operations and used
 // them. The word became load-bearing when the specification made an
 // implementation's own account of itself part of the ABI, and the conformance

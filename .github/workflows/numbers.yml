@@ -140,6 +140,7 @@ jobs:
             { "unlinkat",       472,   -2, 0, 0, 0 },
             { "readlinkat",     473,   -2, 0, 0, 0 },
             { "mkdirat",        475,   -2, 0, 0, 0 },
+            { "fchmodat",       467,   -2, 0, 0, 0 },  /* openkal 0.13 */
             { "ulock_wait",     515,    0, 0, 0, 0 },
             { "ulock_wake",     516,    0, 0, 0, 0 },
             /* The socket calls, with a descriptor that cannot be one. */

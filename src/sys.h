@@ -54,7 +54,7 @@ inline okm_long sys(okm_long n, okm_long a = 0, okm_long b = 0, okm_long c = 0,
     register okm_long x4 __asm__("x4") = e;
     register okm_long x5 __asm__("x5") = f;
     okm_long failed;
-    // ⚠️⚠️ THE SECOND REGISTER COMES BACK TOO, AND UNTIL 0.9.1 IT WAS DECLARED AN
+    // THE SECOND REGISTER COMES BACK TOO, AND UNTIL 0.9.1 IT WAS DECLARED AN
     // INPUT ONLY. This kernel returns a second value in x1 from every call ---
     // the two calls below read it --- and writes it whether or not the call has
     // one. Declared as an input, x1 was assumed to survive, and an optimizing
@@ -189,18 +189,20 @@ enum : okm_long {
     nr_fstatat64 = 470, nr_unlinkat = 472, nr_readlinkat = 473,
     nr_symlinkat = 474, nr_fstatfs64 = 346, nr_sysctl = 202,
     nr_mkdirat = 475,
+    // openkal 0.13: whether a node may be started
+    nr_fchmodat = 467,
     nr_ulock_wait = 515, nr_ulock_wake = 516,
 
     // The socket calls, and the one that reports readiness.
     //
-    // ⚠️ THEY ARE THE ORIGINAL BSD NUMBERS AND THEY ARE LOW, which is worth
+    // THEY ARE THE ORIGINAL BSD NUMBERS AND THEY ARE LOW, which is worth
     // stating because the numbering here is not the other kernel's in any
     // respect: `accept' is 30 there and 288 here, and a table copied from the
     // wrong system produces a signal named "bad system call" rather than a
     // failed call. .github/workflows/numbers.yml reads them from the system's
     // own header on both architectures.
     //
-    // ⭐ THERE IS NO `accept4' AND NO `pipe2' ON THIS SYSTEM, so close-on-exec
+    // THERE IS NO `accept4' AND NO `pipe2' ON THIS SYSTEM, so close-on-exec
     // is set after the fact with `fcntl'. process.cpp already records what that
     // costs and why a program using these operations from one context is not
     // affected by it.
@@ -213,7 +215,7 @@ enum : okm_long {
 
 // --- the network's own constants ---------------------------------------------
 //
-// ⚠️ TWO OF THESE DIFFER FROM THE OTHER KERNEL'S AND WOULD NOT ANNOUNCE IT.
+// TWO OF THESE DIFFER FROM THE OTHER KERNEL'S AND WOULD NOT ANNOUNCE IT.
 // `AF_INET6' is 30 here and 10 there, and `SOL_SOCKET' is 0xffff here and 1
 // there. A value taken from the wrong system produces a call that fails with
 // an ordinary error, which reads as a defect in the caller.
@@ -227,7 +229,7 @@ enum : okm_long {
     wnohang = 1,
 };
 
-// This kernel's socket addresses. ⚠️ THE FIRST BYTE IS A LENGTH, which the
+// This kernel's socket addresses. THE FIRST BYTE IS A LENGTH, which the
 // other kernel's layout does not have: there the family occupies two bytes and
 // here it occupies the second byte alone. A structure copied from that system
 // puts the family where this one reads a length.
@@ -254,7 +256,8 @@ struct kpollfd { int fd; short events; short revents; };
 
 // --- error values, as this kernel returns them -------------------------------
 enum : int {
-    e_perm = 1, e_noent = 2, e_intr = 4, e_io = 5, e_badf = 9, e_child = 10,
+    e_perm = 1, e_noent = 2, e_intr = 4, e_io = 5, e_noexec = 8, e_badf = 9,
+    e_child = 10,
     e_again = 35, e_nomem = 12, e_acces = 13, e_fault = 14, e_busy = 16,
     e_exist = 17, e_xdev = 18, e_nodev = 19, e_notdir = 20, e_isdir = 21,
     e_inval = 22, e_nfile = 23, e_mfile = 24, e_notty = 25, e_fbig = 27,
@@ -270,7 +273,7 @@ enum : int {
 enum : okm_long {
     o_rdonly = 0, o_wronly = 1, o_rdwr = 2,
 
-    // ⚠️ THIS SYSTEM'S VALUES, WHICH ARE NOT THE OTHER ONE'S. A read lock is 1
+    // THIS SYSTEM'S VALUES, WHICH ARE NOT THE OTHER ONE'S. A read lock is 1
     // here and 0 there, and a write lock is 3 here and 1 there --- the BSD
     // numbering rather than the one the other kernel took. A table copied from
     // the sibling implementation would compile, run, and take the wrong kind of
@@ -281,6 +284,13 @@ enum : okm_long {
     // The open-file form, which this system has had since 10.10. The holder is
     // the open file rather than the process, which is what openkal states.
     f_ofd_getlk = 92, f_ofd_setlk = 90, f_ofd_setlkw = 91,
+
+    // THE LOWEST FREE DESCRIPTOR AT OR ABOVE A BOUND, atomically. openkal 0.13:
+    // the exec-report pipe in src/process.cpp is lifted above the placement
+    // range with this rather than with a named `dup2', because naming the
+    // number would close whatever a granted directory already occupies there.
+    // 67 is this kernel's own value and is not the other kernel's 1030.
+    f_dupfd_cloexec = 67,
 
     // sysctl: how many processors this machine runs at once.
     ctl_hw = 6, hw_ncpu = 3,
@@ -320,6 +330,7 @@ inline int translate(okm_long r) {
         case e_notempty:                                 return 11; // not empty
         case e_isdir:                                    return 12; // is directory
         case e_notdir:                                   return 13; // not directory
+        case e_noexec:                                   return 14; // not program
         default:                                         return 3;  // io
     }
 }
@@ -331,7 +342,7 @@ inline int translate(okm_long r) {
 // consults --- a property that varies between the RESOURCES of an interface is
 // answered by an enquiry taking the resource, and here the resource's format is
 // what the enquiry has to look at.
-// ⚠️ THIS SYSTEM'S `struct flock' PUTS THE POSITIONS FIRST, and the other
+// THIS SYSTEM'S `struct flock' PUTS THE POSITIONS FIRST, and the other
 // kernel's puts the kinds first. The two layouts are not interchangeable, and a
 // structure copied across would place a 64-bit offset where two shorts belong.
 struct kflock {

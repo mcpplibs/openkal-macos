@@ -1,7 +1,7 @@
 import mcpp;
 import std;
 
-// ⭐ WHERE THIS SYSTEM'S NAMES COME FROM, PUT ON THE CONSUMER'S LINK LINE.
+// WHERE THIS SYSTEM'S NAMES COME FROM, PUT ON THE CONSUMER'S LINK LINE.
 //
 // `port/libSystem.tbd` lists the whole of what a program above openkal borrows
 // from this system — two names, and a third that belongs to the object format.
@@ -9,7 +9,7 @@ import std;
 // makes the program name `/usr/lib/libSystem.B.dylib` and bind to the real
 // library when it runs.
 //
-// ⚠️ IT HAS TO BE A SEARCH PATH RATHER THAN A FILE ON THE LINE, and it has to
+// IT HAS TO BE A SEARCH PATH RATHER THAN A FILE ON THE LINE, and it has to
 // come from HERE rather than from whoever is building. `link_search` reaches
 // the CONSUMER's link line — the package that knows this system is not the
 // package being built — and a relative path in `ldflags` would resolve against
@@ -21,7 +21,7 @@ import std;
 // (`openkal-musl/tools/cross-build-macos.sh`) that names the file directly. A
 // build tool that resolves this package should not need that script.
 //
-// ⚠️⚠️ AND ONLY WHEN THIS SYSTEM'S OWN STUB IS NOT PRESENT, WHICH THE FIRST
+// AND ONLY WHEN THIS SYSTEM'S OWN STUB IS NOT PRESENT, WHICH THE FIRST
 // VERSION OF THIS FILE GOT WRONG.
 //
 // It said "not conditional on the host" and meant it as a principle. The
@@ -36,7 +36,7 @@ import std;
 // SDK, so `-lSystem` stops at the first match, and a program that needs
 // `strlen` is told there is no such name.
 //
-// ⚠️ Measured 2026-08-22, this package's own conformance suite on a macOS
+// Measured 2026-08-22, this package's own conformance suite on a macOS
 // runner, one commit after the line was added:
 //
 //     ld64.lld: error: undefined symbol: strlen
@@ -54,7 +54,7 @@ import std;
 // links against it just as well and names the same library.
 
 int main() {
-    // ⚠️⚠️ THE CONDITION IS NOT "WHICH MACHINE", AND THE FIRST TWO ATTEMPTS AT
+    // THE CONDITION IS NOT "WHICH MACHINE", AND THE FIRST TWO ATTEMPTS AT
     // IT BOTH WERE.
     //
     // Attempt one supplied the stub always, and on this system it SHADOWED the
@@ -69,12 +69,12 @@ int main() {
     //     ld64.lld: error: undefined symbol: clock_gettime_nsec_np
     //     ld64.lld: error: undefined symbol: pthread_create_from_mach_thread
     //
-    // ⭐ The fact that decides it is whether the build was POINTED AT A TARGET.
+    // The fact that decides it is whether the build was POINTED AT A TARGET.
     // When it was, the tool supplies no system of its own and this package is
     // the only thing that can name one. When it was not — a native build, which
     // is what this package's own conformance suite does — the SDK is on the
     // link and is the complete answer.
-    // ⚠️ `MCPP_TARGET_REQUESTED` AND NOT `MCPP_TARGET`. The second is filled in
+    // `MCPP_TARGET_REQUESTED` AND NOT `MCPP_TARGET`. The second is filled in
     // with the host when nobody named a target, so it is never empty and the
     // test was always true — which put this stub on a NATIVE link, where the
     // SDK's complete one was already there and ours shadowed it:
@@ -85,7 +85,7 @@ int main() {
     // native build. See mcpp's `build_program.cppm` for why the two are
     // different questions even when the triples are equal.
     //
-    // ⭐ An mcpp too old to set it leaves it empty, and that is the right answer
+    // An mcpp too old to set it leaves it empty, and that is the right answer
     // for such a build tool: it has no graph-supplied target side, so the
     // system is always on the link.
     const char* requested = std::getenv("MCPP_TARGET_REQUESTED");
