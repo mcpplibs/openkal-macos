@@ -59,6 +59,106 @@ constexpr okm_long nr_fchdir = 13;
 // openkal 0.11: the unit a started program joins.
 constexpr okm_long nr_setpgid = 82;
 
+// --- reporting a replacement that failed -----------------------------------
+//
+// THE REPLACEMENT HAPPENS IN THE DUPLICATE, SO ITS FAILURE WAS REPORTED TO
+// NOBODY. Version 0.13.
+//
+// A program is started here by duplicating this image and replacing the
+// duplicate. The replacement is the part that can fail --- the name is absent,
+// or is a directory, or is not a program, or may not be executed --- and it
+// failed inside an image the caller does not have. This implementation ended
+// that image with 127 and answered kal_ok with a handle, so a caller learned
+// something was wrong only by waiting and reading 127, which is exactly what a
+// program that RAN and exited 127 reports. openkal SPEC.md clause 11 entry 16.
+//
+// The arrangement is openkal-linux's: a pipe whose ends close when the image
+// is replaced. Nothing arrives, the replacement happened; a value arrives, it
+// did not, and the value says why.
+struct exec_report {
+    int  fd[2] = { -1, -1 };
+    bool armed = false;
+
+    // THE PIPE MUST NOT SIT WHERE THE DUPLICATE IS ABOUT TO PLACE SOMETHING.
+    // The duplicate places streams at 0, 1 and 2 and granted directories at 3
+    // and upwards, so a pipe that happened to hold one of those numbers would
+    // be closed by the very placement whose failure it exists to report --- and
+    // the parent would then read end-of-input and call that success.
+    //
+    // F_DUPFD_CLOEXEC answers the lowest FREE descriptor at or above a bound,
+    // atomically. There is no pipe2 on this kernel, so each end is marked
+    // close-on-exec separately before being lifted; a caller that spawns from
+    // one context, which is what this operation is used from, is not affected
+    // by the two steps not being atomic with each other.
+    bool open(kal_uintptr placements) {
+        okm_long w = -1;
+        const okm_long r = okm::pipe_pair(w);
+        if (okm::failed(r)) return false;
+        fd[0] = static_cast<int>(r);
+        fd[1] = static_cast<int>(w);
+        okm::sys(okm::nr_fcntl, fd[0], okm::f_setfd, okm::fd_cloexec);
+        okm::sys(okm::nr_fcntl, fd[1], okm::f_setfd, okm::fd_cloexec);
+        const okm_long floor = 3 + static_cast<okm_long>(placements);
+        armed = lift(fd[0], floor) && lift(fd[1], floor);
+        if (!armed) close_both();
+        return armed;
+    }
+
+    void close_both() {
+        if (fd[0] >= 0) okm::sys(okm::nr_close, fd[0]);
+        if (fd[1] >= 0) okm::sys(okm::nr_close, fd[1]);
+        fd[0] = fd[1] = -1;
+    }
+
+    // In the duplicate, once the replacement has returned --- which it does
+    // only when it did not happen.
+    void say(okm_long failure) const {
+        if (!armed) return;
+        okm_long value = failure;
+        okm::sys(okm::nr_write, fd[1],
+                 reinterpret_cast<okm_long>(&value), sizeof value);
+    }
+
+    // In this image. Zero when the replacement happened, otherwise the
+    // kernel's own negative value for why it did not.
+    okm_long heard() {
+        if (!armed) return 0;
+        okm::sys(okm::nr_close, fd[1]);
+        fd[1] = -1;
+        okm_long value = 0;
+        okm_long n;
+        // A transfer this short is not divided, but it can be interrupted.
+        do {
+            n = okm::sys(okm::nr_read, fd[0],
+                         reinterpret_cast<okm_long>(&value), sizeof value);
+        } while (n == -okm::e_intr);
+        okm::sys(okm::nr_close, fd[0]);
+        fd[0] = -1;
+        return (n == static_cast<okm_long>(sizeof value)) ? value : 0;
+    }
+
+private:
+    static bool lift(int& f, okm_long floor) {
+        const okm_long n = okm::sys(okm::nr_fcntl, f, okm::f_dupfd_cloexec, floor);
+        if (okm::failed(n)) return false;
+        okm::sys(okm::nr_close, f);
+        f = static_cast<int>(n);
+        return true;
+    }
+};
+
+// A duplicate that could not be replaced is ended, and this image waits for it
+// so that nothing is left for a caller to meet later. It is the one wait this
+// implementation performs that a caller did not ask for, and it is bounded:
+// the duplicate has already reached `exit'.
+inline void reap(okm_long child) {
+    int status = 0;
+    okm_long r;
+    do {
+        r = okm::sys(okm::nr_wait4, child,
+                     reinterpret_cast<okm_long>(&status), 0, 0);
+    } while (r == -okm::e_intr);
+}
 
 }  // namespace
 
@@ -67,14 +167,14 @@ extern "C" {
 // Starting a program. One function since openkal 0.11, where three declarations
 // became one and their modifiers became positions in `kal_spawn'.
 //
-// ⚠️⚠️ AND THIS IMPLEMENTATION IS WHERE THE MISSING MODIFIER WAS ALREADY VISIBLE,
+// AND THIS IMPLEMENTATION IS WHERE THE MISSING MODIFIER WAS ALREADY VISIBLE,
 // which is worth recording rather than quietly fixing.
 //
 // This kernel has no `execveat', so a program named relative to a directory has
 // always been started by entering that directory first --- the `fchdir(base)'
 // below used to be the whole story. So a started program's working directory WAS
 // `base' here, and on the other kernel it was whatever that implementation
-// happened to be in. ⭐ Same openkal calls, two different observable answers,
+// happened to be in. Same openkal calls, two different observable answers,
 // and neither was wrong because the specification said nothing.
 //
 // ⇒ 0.11 gives the caller a second directory, and both implementations now enter
@@ -94,7 +194,7 @@ int kal_process_spawn(const kal_spawn* how,
     if (!okm::acceptable(path, path_len)) return kal_err_invalid;
     if (how->grant_count > 0 && how->grants == nullptr) return kal_err_invalid;
 
-    // ⚠️ A LIFETIME THIS KERNEL CANNOT BIND IS REFUSED BEFORE ANYTHING STARTS.
+    // A LIFETIME THIS KERNEL CANNOT BIND IS REFUSED BEFORE ANYTHING STARTS.
     // The reason is unchanged from 0.10 and is stated at kal_process_props: the
     // binding must hold however the caller ends, including when it is killed
     // outright, and what this system offers instead is a WATCH, which needs a
@@ -117,7 +217,7 @@ int kal_process_spawn(const kal_spawn* how,
         if (granted[i] < 0) return kal_err_invalid;
     }
 
-    // ⭐ THE PROGRAM'S NAME IS MADE ABSOLUTE BEFORE THE DIRECTORY MOVES, because
+    // THE PROGRAM'S NAME IS MADE ABSOLUTE BEFORE THE DIRECTORY MOVES, because
     // with no `execveat' the two things `base' and `work' now mean cannot both be
     // served by one `fchdir'. `F_GETPATH' answers the path of an open directory,
     // which src/fs.cpp already relies on for the same reason: this kernel has no
@@ -142,15 +242,22 @@ int kal_process_spawn(const kal_spawn* how,
     const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
     const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
 
-    // ⭐ The unit, named here by a process group --- which is to say by whichever
+    // The unit, named here by a process group --- which is to say by whichever
     // program formed it first. Zero for the first member; a later one is given
     // the number to join.
     const okm_long join = how->job ? static_cast<okm_long>(how->job->h) : 0;
     const bool     unit = how->job != nullptr;
 
+    // The bound is 3 + grant_count, because the placements below reach that
+    // far. A caller that cannot arm the report is not refused for it: `heard'
+    // then answers zero and this operation behaves as it did before 0.13,
+    // which is the same fallback openkal-linux takes.
+    exec_report report;
+    report.open(how->grant_count);
+
     bool is_duplicate = false;
     const okm_long child = okm::duplicate(is_duplicate);
-    if (okm::failed(child)) return okm::translate(child);
+    if (okm::failed(child)) { report.close_both(); return okm::translate(child); }
 
     // The duplicate is distinguished by the second value the call returns and
     // not by the first: both images receive the same first value here. The
@@ -168,14 +275,36 @@ int kal_process_spawn(const kal_spawn* how,
 
         // The directory the program RUNS in --- `whole' already carries where it
         // is named from, so this no longer has to serve both.
-        okm::sys(nr_fchdir, w);
+        //
+        // A FAILURE HERE MUST NOT REACH `execve'. Running the right program in
+        // the wrong directory is the silent wrongness this pipe exists to
+        // remove, so it is reported through the same channel an exec failure
+        // uses.
+        if (const okm_long e = okm::sys(nr_fchdir, w); okm::failed(e)) {
+            report.say(e);
+            okm::sys(okm::nr_exit, 127);
+            for (;;) { }
+        }
 
         if (unit) okm::sys(nr_setpgid, 0, join);
 
-        okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
-                 reinterpret_cast<okm_long>(args.slots),
-                 reinterpret_cast<okm_long>(envs.slots));
-        for (;;) okm::sys(okm::nr_exit, 127);
+        const okm_long why = okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
+                                      reinterpret_cast<okm_long>(args.slots),
+                                      reinterpret_cast<okm_long>(envs.slots));
+        // Reached only when the replacement did not happen, because when it
+        // does there is nothing here to reach.
+        report.say(why);
+        okm::sys(okm::nr_exit, 127);
+        for (;;) { }
+    }
+
+    // A START THAT DID NOT HAPPEN IS REPORTED, AND BY ITS REASON. Version
+    // 0.13. Before this the duplicate's own failure reached nobody: this image
+    // read nothing from a channel that did not exist and answered kal_ok with
+    // a handle, whatever the name given it was.
+    if (const okm_long why = report.heard()) {
+        reap(child);
+        return okm::translate(why);
     }
 
     // Written only after the start succeeded, and only when the unit was new:
@@ -260,7 +389,7 @@ int kal_process_terminate(kal_process h) {
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
-// ⚠️⚠️ NOT CLAIMED HERE, FOR THE SAME REASON THE SIGPIPE NOTE IN src/env.cpp
+// NOT CLAIMED HERE, FOR THE SAME REASON THE SIGPIPE NOTE IN src/env.cpp
 // GIVES. Observing a request to end means installing a disposition, and this
 // kernel's `sigaction' takes a structure carrying a TRAMPOLINE its C library
 // supplies. A disposition installed with the wrong shape shows up as a program
@@ -270,9 +399,9 @@ int kal_process_terminate(kal_process h) {
 // ⇒ Null, and KAL_PROCESS_PROP_STOP_REQUESTED unclaimed, so a caller that asks
 // first is told. The other implementation answers it; this one will when it can
 // be exercised here.
-// ⭐⭐ A WORD THIS PROGRAM'S ENVIRONMENT SETS WHEN SOMEBODY HAS ASKED IT TO END.
+// A WORD THIS PROGRAM'S ENVIRONMENT SETS WHEN SOMEBODY HAS ASKED IT TO END.
 //
-// ⚠️⚠️ THE TRAMPOLINE IS THIS IMPLEMENTATION'S OWN, WHICH IS WHY THIS ARRIVED A
+// THE TRAMPOLINE IS THIS IMPLEMENTATION'S OWN, WHICH IS WHY THIS ARRIVED A
 // VERSION LATE. The raw `sigaction' of this kernel takes a structure whose
 // SECOND field is `sa_tramp': the kernel enters that address, not the handler,
 // and the handler is passed to it as an argument. A C library ordinarily
@@ -283,7 +412,7 @@ int kal_process_terminate(kal_process h) {
 // implementation could ship. So the order was: a conformance check that raises
 // the signal first, this second.
 //
-// ⚠️ ARMED ON THE FIRST ENQUIRY AND NOT AT STARTUP, exactly as openkal-linux
+// ARMED ON THE FIRST ENQUIRY AND NOT AT STARTUP, exactly as openkal-linux
 // argues: a program that never asks keeps the default action, and adding this
 // operation therefore changes nothing for anyone who does not use it.
 namespace {
@@ -299,7 +428,7 @@ constexpr okm_long nr_sigaction = 46;
 // ucontext) in x0..x4; it calls the handler with the last three and then asks
 // the kernel to restore the interrupted context.
 //
-// ⚠️ x19 AND x20 ARE USED WITHOUT BEING SAVED, and that is correct here rather
+// x19 AND x20 ARE USED WITHOUT BEING SAVED, and that is correct here rather
 // than sloppy: this function does not return to its caller. `sigreturn' restores
 // the whole of the interrupted context, callee-saved registers included, so the
 // values these two held belong to a frame the kernel is about to reinstate.
@@ -340,7 +469,7 @@ struct macos_sigaction {
     int flags;
 };
 
-// ⚠️ THE RESULT IS EXAMINED, AND THE FUNCTION EXISTS TO RETURN IT. An
+// THE RESULT IS EXAMINED, AND THE FUNCTION EXISTS TO RETURN IT. An
 // installation that failed would leave a word that can never change, and
 // answering the caller with one is `nothing here reports success having done
 // nothing' in its exact form: the program would ask whether its end had been
@@ -359,7 +488,7 @@ bool arm_one(int signo) {
 
 const kal_u32* kal_process_stop_requested(void) {
 #if defined(__aarch64__)
-    // ⚠️ THREE STATES AND NOT TWO: not yet tried, armed, refused. A second
+    // THREE STATES AND NOT TWO: not yet tried, armed, refused. A second
     // caller must be told what the first found rather than arming again --- and
     // must not be told `not yet tried' while the first is still inside the
     // installation.
@@ -374,7 +503,7 @@ const kal_u32* kal_process_stop_requested(void) {
     }
     return state == 1 ? &g_stop_word : nullptr;
 #else
-    // ⚠️ DECLINED ON THE OTHER ARCHITECTURE, AND NOT BECAUSE IT CANNOT BE
+    // DECLINED ON THE OTHER ARCHITECTURE, AND NOT BECAUSE IT CANNOT BE
     // WRITTEN. The trampoline above has an x86_64 counterpart of the same
     // length. What it does not have is a way to be RUN: the build tool has no
     // release for x86_64 on this system, so continuous integration compiles the
@@ -400,7 +529,7 @@ int kal_process_job_enter(kal_job* j) {
 
 // Every program in the unit, including ones never held as a handle.
 //
-// ⚠️ A group is named by a process identifier, and those are reused: once the
+// A group is named by a process identifier, and those are reused: once the
 // program that formed it has ended and the numbers have wrapped, this can reach
 // a different group. That is what this system does, and it is recorded rather
 // than hidden.
@@ -423,7 +552,7 @@ void kal_process_close(kal_process) { }
 // Starting a program whose lifetime is bound to this one's. Version 0.10.
 //
 
-// ⚠️ EVERY POSITION THE SPECIFICATION HAS ASSIGNED IS ACCOUNTED FOR HERE, either
+// EVERY POSITION THE SPECIFICATION HAS ASSIGNED IS ACCOUNTED FOR HERE, either
 // by being claimed or by being deliberately absent. BOUND_LIFETIME is absent
 // because `kal_process_spawn' above refuses every flag; STOP_REQUESTED is
 // claimed only where the trampoline it needs has been entered by a running
@@ -434,7 +563,7 @@ kal_uintptr kal_process_props(void) { return
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
   | KAL_PROCESS_PROP_JOB
 #if defined(__aarch64__)
-  // ⚠️ AND IT AGREES WITH `kal_process_stop_requested', WHICH IS A REQUIREMENT
+  // AND IT AGREES WITH `kal_process_stop_requested', WHICH IS A REQUIREMENT
   // AND NOT A COURTESY: the header defines null there as the absence this
   // position reports, so the two cannot disagree. It is read and never armed
   // --- asking what an implementation can do must not install a disposition ---

@@ -18,7 +18,7 @@
 // becomes ready within the bound and then transfers slowly is not interrupted,
 // which is the behaviour every environment's own bounded read has.
 //
-// ⚠️ THIS KERNEL'S `poll' STATES ITS BOUND IN MILLISECONDS, and `ppoll' --- the
+// THIS KERNEL'S `poll' STATES ITS BOUND IN MILLISECONDS, and `ppoll' --- the
 // call the other kernel uses, which takes nanoseconds --- does not exist here.
 // The granularity this interface reports is therefore a millisecond, which is
 // what the environment can distinguish rather than what would be convenient.
@@ -28,7 +28,7 @@ namespace {
 // A duration of zero denotes no bound, which is the convention kal_task_wait
 // establishes. `poll' expresses that with a negative number.
 //
-// ⚠️ A BOUND SHORTER THAN A MILLISECOND ROUNDS UP TO ONE AND NOT DOWN TO NONE.
+// A BOUND SHORTER THAN A MILLISECOND ROUNDS UP TO ONE AND NOT DOWN TO NONE.
 // Rounding down would turn a wait into a poll, and the header is explicit: a
 // caller that asks for less is not refused and does not get less.
 int bound_ms(kal_u64 ns) {

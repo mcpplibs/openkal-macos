@@ -1,17 +1,17 @@
 // openkal.random on this system --- getentropy(2).
 //
-// ⭐ THE NUMBER CAME FROM THE MACHINE, NOT FROM MEMORY. `.github/workflows/
+// THE NUMBER CAME FROM THE MACHINE, NOT FROM MEMORY. `.github/workflows/
 // numbers.yml` reads every number this implementation uses out of the SDK's own
 // `sys/syscall.h`, on both runners this repository targets, and both answered
 // `SYS_getentropy 500`. That workflow exists because a number recalled rather
 // than read is a number that is right until the day it is not.
 //
-// ⚠️ AND NOT `arc4random_buf`, WHICH IS WHAT libc++ WOULD REACH FOR HERE.
+// AND NOT `arc4random_buf`, WHICH IS WHAT libc++ WOULD REACH FOR HERE.
 // That name is in libSystem, and reaching into libSystem is what this backend
 // exists to avoid: it issues this kernel's calls directly, as the note in
 // `sys.h` records. `getentropy` is the call underneath.
 //
-// ⚠️ THE KERNEL CAPS A CALL AT 256 BYTES. That is this system's limit and not
+// THE KERNEL CAPS A CALL AT 256 BYTES. That is this system's limit and not
 // this interface's, so the loop below turns it into the all-or-nothing
 // `kal_random_fill` promises.
 #include "sys.h"
@@ -29,7 +29,7 @@ extern "C" int kal_random_fill(void* out, kal_uintptr len) {
                                     reinterpret_cast<okm_long>(p + filled),
                                     static_cast<okm_long>(chunk), 0, 0);
         if (r < 0) {
-            // ⚠️ The buffer is not restored, and the contract says it need not
+            // The buffer is not restored, and the contract says it need not
             // be: a failed fill leaves it unspecified rather than unchanged.
             if (r == -4 /* EINTR */) continue;
             return kal_err_io;

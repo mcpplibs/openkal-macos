@@ -9,7 +9,7 @@
 // written down before this interface existed. What is added here is the other
 // use of the same primitive --- the one where the duplicate is not replaced.
 //
-// ⚠️ THE DUPLICATE IS DISTINGUISHED BY THE SECOND VALUE THE CALL RETURNS AND
+// THE DUPLICATE IS DISTINGUISHED BY THE SECOND VALUE THE CALL RETURNS AND
 // NOT BY THE FIRST. Both images receive a process identifier in the first
 // register on this system: the original receives the duplicate's and the
 // duplicate receives the ORIGINAL's, so an implementation that tested the first

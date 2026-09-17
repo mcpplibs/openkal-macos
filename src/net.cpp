@@ -11,7 +11,7 @@
 // it yields is the bare descriptor, because that is what openkal.stream's
 // transfer operations take.
 //
-// ⚠️ TWO DIFFERENCES FROM THE OTHER KERNEL, BOTH IN THE SHAPE OF THE CALLS
+// TWO DIFFERENCES FROM THE OTHER KERNEL, BOTH IN THE SHAPE OF THE CALLS
 // RATHER THAN IN WHAT THEY DO.
 //
 //   There is no `accept4' and no flag upon `socket' that closes a descriptor

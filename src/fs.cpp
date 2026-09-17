@@ -64,16 +64,78 @@ int kind_of(okm_u32 mode) {
     }
 }
 
+// The properties of the volume a descriptor is on. kal_fs_props answers with
+// this, and so does the one field of an enquiry that is a volume's property
+// rather than a node's.
+//
+// AN ENQUIRY TAKING THE RESOURCE, BECAUSE EVERY POSITION IS A PROPERTY OF THE
+// FORMAT. This kernel names the format in words rather than by a number, so
+// that is what is consulted. For a format it does not recognise, what is
+// claimed is the set that cannot be wrong: a modification time is reported for
+// every volume it mounts, and `renameat' within one directory is atomic by
+// POSIX.
+kal_uintptr volume_props(int fd) {
+    // Locks and capacity are answered by this system's VFS for every format
+    // beneath it, so they are in the conservative set rather than switched on
+    // by name below.
+    const kal_uintptr conservative =
+        KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME
+        | KAL_FS_PROP_LOCKS | KAL_FS_PROP_CAPACITY;
+    if (fd < 0) return 0;
+
+    okm::kstatfs64 sf{};
+    const okm_long r = okm::sys(okm::nr_fstatfs64, fd, reinterpret_cast<okm_long>(&sf));
+    if (okm::failed(r)) return conservative;
+
+    const auto named = [&](const char* w) {
+        for (int i = 0; i < 16; ++i) {
+            if (sf.f_fstypename[i] != w[i]) return false;
+            if (w[i] == '\0') return true;
+        }
+        return false;
+    };
+
+    // Nodes whose content is another name, on a format that stores a mode.
+    // This is the ordinary volume of this system.
+    if (named("apfs") || named("hfs"))
+        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS
+             | KAL_FS_PROP_EXECUTABLE;
+
+    // The automounter's own namespace: links, and no mode of its own.
+    if (named("autofs"))
+        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS;
+
+    // A case-sensitive volume with such nodes: a disk image formatted that
+    // way, or a network volume presenting one. What a mode means there depends
+    // on a server this implementation does not control, so it is not claimed.
+    if (named("nfs") || named("smbfs") || named("webdav"))
+        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS;
+
+    // The FAT family stores neither a case distinction nor a node that names
+    // another, nor a mode. `symlinkat' on such a volume reports a refusal, and
+    // this is where a caller learns it before it tries.
+    if (named("msdos") || named("exfat")) return conservative;
+
+    return conservative;
+}
+
 // Writes no more of the structure than the caller says exists on its side, and
-// reports which fields it filled. `wanted' is ignored and every field is
-// filled: one call answers all of them on this kernel, so selecting would cost
-// a branch and save nothing.
-void fill_info(const okm::kstat64& st, kal_u32 wanted, kal_node_info* out) {
-    (void)wanted;
+// reports which fields it filled. Every field but `executable' is filled
+// unconditionally: one call answers all of them on this kernel, so selecting
+// would cost a branch and save nothing.
+//
+// `executable' is the exception, because it is a property of the volume as
+// well as of the node: a format that stores no mode has nothing honest to
+// report, and reporting the mount's own choice of bits would be answering for
+// the volume rather than the node. The volume is consulted only when the
+// caller wants the field, and only for a file --- kal_fs_props already answers
+// whether it is worth asking.
+void fill_info(const okm::kstat64& st, kal_u32 wanted, kal_node_info* out,
+              int volume_fd) {
     const kal_u32 self = out->self_size;
     kal_node_info v{};
     v.self_size   = self;
-    v.present     = KAL_INFO_ALL;
+    v.present     = KAL_INFO_ALL & ~KAL_INFO_EXECUTABLE;
     v.size        = static_cast<kal_u64>(st.size);
     v.modified_ns = static_cast<kal_u64>(st.mtime_sec) * 1000000000u
                   + static_cast<kal_u64>(st.mtime_nsec);
@@ -83,6 +145,18 @@ void fill_info(const okm::kstat64& st, kal_u32 wanted, kal_node_info* out) {
     v.identity[1] = st.ino;
     v.kind        = kind_of(okm::stat_mode(st));
     v.writable    = (okm::stat_mode(st) & 0200u) != 0 ? 1 : 0;
+
+    // A caller whose structure ends before the field is not given the
+    // position, and is not written to beyond what it stated (clause 4.2).
+    const kal_u32 reaches = static_cast<kal_u32>(
+        __builtin_offsetof(kal_node_info, executable) + sizeof v.executable);
+    if ((wanted & KAL_INFO_EXECUTABLE) != 0 && self >= reaches
+        && v.kind == kal_node_file
+        && (volume_props(volume_fd) & KAL_FS_PROP_EXECUTABLE) != 0) {
+        v.present    |= KAL_INFO_EXECUTABLE;
+        v.executable  = (okm::stat_mode(st) & 0111u) != 0 ? 1 : 0;
+    }
+
     const kal_u32 n = self < sizeof v ? self : (kal_u32)sizeof v;
     okm::copy(out, &v, n);
 }
@@ -231,7 +305,7 @@ int kal_fs_info(kal_dir base, const char* name, kal_uintptr len,
         }
         return okm::translate(r);
     }
-    fill_info(st, wanted, out);
+    fill_info(st, wanted, out, b);
     return kal_ok;
 }
 
@@ -241,7 +315,7 @@ int kal_fs_file_info(kal_file f, kal_u32 wanted, kal_node_info* out) {
     okm::kstat64 st{};
     const okm_long r = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
     if (okm::failed(r)) return okm::translate(r);
-    fill_info(st, wanted, out);
+    fill_info(st, wanted, out, fd);
     return kal_ok;
 }
 
@@ -277,7 +351,7 @@ int kal_fs_set_modified(kal_file f, kal_u64 modified_ns) {
 
 // The modification time of a NAME, including a directory. Version 0.10.
 //
-// ⚠️ Expressed as opening the name and using the operation above's own call,
+// Expressed as opening the name and using the operation above's own call,
 // because this system's time-setting call takes a descriptor. Opening for
 // READING is enough for it and is what lets a DIRECTORY be reached --- which is
 // the whole reason this declaration exists: the file-taking form takes a
@@ -310,9 +384,43 @@ int kal_fs_set_modified_at(kal_dir base, const char* name, kal_uintptr len,
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
+// Whether a NAME's node may be started as a program. Version 0.13.
+//
+// Recorded as the mode's execute bits, which is what this system's own tools
+// read to decide the same question. The interface states one property and not
+// a permission: setting it grants every class of caller that may already read
+// the node, and clearing it clears all three classes at once. `kal_fs_props'
+// is asked first, so a volume that stores no mode is refused rather than
+// reporting success and changing nothing.
+int kal_fs_set_executable_at(kal_dir base, const char* name, kal_uintptr len,
+                             int executable) {
+    const int b = okm::unpack(base.h);
+    if (b < 0 || !okm::acceptable(name, len)) return kal_err_invalid;
+    okm::terminated t(name, len); if (!t.ok) return kal_err_invalid;
+    if ((volume_props(b) & KAL_FS_PROP_EXECUTABLE) == 0) return kal_err_not_supported;
+
+    // Resolves, as the enquiry does by default, so the node changed is the
+    // node an ordinary caller would have been told about.
+    okm::kstat64 st{};
+    okm_long r = okm::sys(okm::nr_fstatat64, b, reinterpret_cast<okm_long>(t.buf),
+                          reinterpret_cast<okm_long>(&st), 0);
+    if (okm::failed(r)) return okm::translate(r);
+    const int k = kind_of(okm::stat_mode(st));
+    if (k == kal_node_directory) return kal_err_is_directory;
+    if (k != kal_node_file) return kal_err_invalid;
+
+    const unsigned mode = okm::stat_mode(st) & 07777u;
+    const unsigned next = executable != 0 ? (mode | ((mode & 0444u) >> 2))
+                                          : (mode & ~0111u);
+    if (next == mode) return kal_ok;
+    r = okm::sys(okm::nr_fchmodat, b, reinterpret_cast<okm_long>(t.buf),
+                static_cast<okm_long>(next), 0);
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
 // --- exclusion upon a range of a file ---------------------------------------
 //
-// ⭐ THE OPEN-FILE FORM. This system's oldest record lock is held by the process
+// THE OPEN-FILE FORM. This system's oldest record lock is held by the process
 // and is released when that process closes any descriptor for the node; openkal
 // states the holder as the `kal_file', and `F_OFD_*' is exactly that.
 static int lock_range(kal_file f, kal_u64 start, kal_u64 len,
@@ -334,7 +442,7 @@ static int lock_range(kal_file f, kal_u64 start, kal_u64 len,
     } while (r == -okm::e_intr);
     if (!okm::failed(r)) return kal_ok;
 
-    // ⚠️⚠️ TWO VALUES MEAN ONE THING HERE, AND openkal NAMES ONE OF THEM. The
+    // TWO VALUES MEAN ONE THING HERE, AND openkal NAMES ONE OF THEM. The
     // standard this call comes from reports a range another holder has as
     // EITHER of two values and leaves the choice to the system. openkal says
     // `kal_err_again', which a caller polls upon; the other translates to
@@ -462,58 +570,7 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter,
 // it is ordinarily installed on. A program that creates two names differing
 // only in case succeeds on the Linux implementation and not on this one, and
 // the position reports it in advance, which no operation could.
-// The properties of the volume a directory is on.
-//
-// AN ENQUIRY TAKING THE RESOURCE, BECAUSE EVERY POSITION IS A PROPERTY OF THE
-// FORMAT. A word per implementation could state none of them honestly here: the
-// volume this system is ordinarily installed on compares names without regard
-// to case, and a volume attached to the same machine may not --- and this
-// implementation offers the whole filesystem as a preopen, so both are
-// reachable through it.
-//
-// This kernel names the format in words rather than by a number, so that is
-// what is consulted. For a format it does not recognise, what is claimed is the
-// set that cannot be wrong: a modification time is reported for every volume it
-// mounts, and `renameat' within one directory is atomic by POSIX.
-kal_uintptr kal_fs_props(kal_dir d) {
-    const int fd = okm::unpack(d.h);
-    // Locks and capacity are answered by this system's VFS for every format
-    // beneath it, so they are in the conservative set rather than switched on
-    // by name below.
-    const kal_uintptr conservative =
-        KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME
-        | KAL_FS_PROP_LOCKS | KAL_FS_PROP_CAPACITY;
-    if (fd < 0) return 0;
-
-    okm::kstatfs64 sf{};
-    const okm_long r = okm::sys(okm::nr_fstatfs64, fd, reinterpret_cast<okm_long>(&sf));
-    if (okm::failed(r)) return conservative;
-
-    const auto named = [&](const char* w) {
-        for (int i = 0; i < 16; ++i) {
-            if (sf.f_fstypename[i] != w[i]) return false;
-            if (w[i] == '\0') return true;
-        }
-        return false;
-    };
-
-    // Nodes whose content is another name, without a case distinction. This is
-    // the ordinary volume of this system.
-    if (named("apfs") || named("hfs") || named("autofs"))
-        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS;
-
-    // A case-sensitive volume with such nodes: a disk image formatted that way,
-    // or a network volume presenting one.
-    if (named("nfs") || named("smbfs") || named("webdav"))
-        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS;
-
-    // The FAT family stores neither a case distinction nor a node that names
-    // another. `symlinkat' on such a volume reports a refusal, and this is
-    // where a caller learns it before it tries.
-    if (named("msdos") || named("exfat")) return conservative;
-
-    return conservative;
-}
+kal_uintptr kal_fs_props(kal_dir d) { return volume_props(okm::unpack(d.h)); }
 
 // Nodes whose content is another name.
 int kal_fs_link_create(kal_dir base, const char* name, kal_uintptr len,

@@ -23,7 +23,7 @@ inline kal_u32 from_net_port(unsigned short net) {
 
 // Fills a kernel address from an endpoint, and reports its length.
 //
-// ⚠️ THE LENGTH IS WRITTEN INTO THE STRUCTURE AS WELL AS RETURNED, because this
+// THE LENGTH IS WRITTEN INTO THE STRUCTURE AS WELL AS RETURNED, because this
 // kernel's layout carries one and the other kernel's does not. A structure left
 // with a zero there is accepted by some calls and not by others, which is the
 // worst of the three possible behaviours.

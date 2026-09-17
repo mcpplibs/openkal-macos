@@ -22,7 +22,7 @@
 // and the default --- there is no such constraint and the ordinary names are
 // used, which also avoids the cost the other arrangement pays.
 
-// ⚠️ DECLARED, NOT INCLUDED — AND THAT IS THE SAME RULE THE BRANCH BELOW
+// DECLARED, NOT INCLUDED — AND THAT IS THE SAME RULE THE BRANCH BELOW
 // ALREADY FOLLOWS.
 //
 // `pthread_create_from_mach_thread` has always been declared here rather than
@@ -32,7 +32,7 @@
 // writes the system-call numbers, openkal-opensbi the SBI identifiers,
 // openkal-windows the Win32 declarations.
 //
-// ⚠️ Measured 2026-08-23, building this package ON this system with the target
+// Measured 2026-08-23, building this package ON this system with the target
 // side coming from the graph:
 //
 //     …/MacOSX.sdk/usr/include/mach/mach_time.h:61:1:
@@ -43,7 +43,7 @@
 // Linux host the same build had taken the graph's copy and said nothing, which
 // is why the difference is a HOST difference and shows up only here.
 //
-// ⭐ `pthread_t` IS A POINTER ON BOTH C LIBRARIES — `struct __pthread*` in musl
+// `pthread_t` IS A POINTER ON BOTH C LIBRARIES — `struct __pthread*` in musl
 // and `struct _opaque_pthread_t*` on this system — so `void*` is the same
 // argument at the ABI, which is the level `extern "C"` matches at. The value is
 // stored as an integer below in either case.
@@ -172,7 +172,7 @@ int kal_task_wait(const kal_u32* word, kal_u32 expected,
 
 // How many contexts can run at the same moment. Version 0.10.
 //
-// ⚠️ Added because its absence was a WRONG ANSWER and not a refusal:
+// Added because its absence was a WRONG ANSWER and not a refusal:
 // `KAL_TASK_PROP_PARALLEL' says whether and not how many, so a C library above
 // answered 1 with no error and a program sizing a pool of workers got one.
 kal_uintptr kal_task_parallelism(void) {

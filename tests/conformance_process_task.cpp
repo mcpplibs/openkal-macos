@@ -188,7 +188,7 @@ int main() {
             kal_process_close(r);
         }
 
-        // ⭐⭐ A PROGRAM THAT NEEDS AN INTERPRETER, WHICH openkal-linux COULD NOT
+        // A PROGRAM THAT NEEDS AN INTERPRETER, WHICH openkal-linux COULD NOT
         // START AND NOBODY HAD MEASURED ANYWHERE.
         //
         // There, `execveat' with a directory descriptor gives the kernel the
@@ -198,7 +198,7 @@ int main() {
         // every architecture, and it was found only because a foreign binary
         // needs an interpreter too and so aarch64 failed loudly.
         //
-        // ⚠️ THIS IMPLEMENTATION IS EXPECTED TO PASS AND IS CHECKED ANYWAY. It
+        // THIS IMPLEMENTATION IS EXPECTED TO PASS AND IS CHECKED ANYWAY. It
         // has no `execveat': it enters the directory and calls `execve' with a
         // whole path, so the kernel never has a name the interpreter cannot
         // reopen. That is a reason to believe it works, and believing was how
@@ -275,7 +275,7 @@ int main() {
 
     // --- being told that an end has been requested ---------------------------
     //
-    // ⚠️⚠️ THIS RAISES THE SIGNAL. Compiling a disposition and never delivering
+    // THIS RAISES THE SIGNAL. Compiling a disposition and never delivering
     // one proves nothing here: what this operation needs on this kernel is a
     // TRAMPOLINE, `sa_tramp' in the structure the raw `sigaction' takes, and a
     // wrong one is not a wrong answer --- it is a program that dies inside the
@@ -283,7 +283,7 @@ int main() {
     // claim KAL_PROCESS_PROP_STOP_REQUESTED until this check existed, and this
     // comment is why the order was that way round.
     //
-    // ⭐ The signal is raised by a shell, which is how a program reaches its own
+    // The signal is raised by a shell, which is how a program reaches its own
     // kernel here without leaving openkal's vocabulary: `kal_process_job_enter'
     // with a zero unit reports the identifier this program runs under, and that
     // is the identifier the shell needs.
@@ -354,11 +354,11 @@ int main() {
 
                     check(*word != 0, "the program is told that its end was requested");
 
-                    // ⭐ AND IT IS STILL RUNNING, which is the half a compiled
+                    // AND IT IS STILL RUNNING, which is the half a compiled
                     // disposition cannot show. Reaching this line is the proof:
                     // a program that died in the handler never gets here.
                     //
-                    // ⚠️⚠️ SAID ALOUD, AND EVERY OTHER CHECK HERE IS SILENT WHEN
+                    // SAID ALOUD, AND EVERY OTHER CHECK HERE IS SILENT WHEN
                     // IT HOLDS. That convention cannot serve this one. Each
                     // observation above is skipped rather than failed when its
                     // precondition is absent --- no root, no word, no shell ---

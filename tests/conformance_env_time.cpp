@@ -20,7 +20,7 @@ int main() {
     // A program always receives the name it was started with, even where the
     // environment has none, in which case it is empty rather than absent.
     check(kal::env::arg_count() >= 1, "at least the program name is present");
-    // ⭐ THE VALUE IS COPIED AND THE LENGTH REPORTED IS THE VALUE'S OWN, so a
+    // THE VALUE IS COPIED AND THE LENGTH REPORTED IS THE VALUE'S OWN, so a
     // capacity of zero asks for the length without writing.
     char buf[1024];
     check(kal::env::arg(0, buf, sizeof buf) >= 0, "argument zero is readable");
