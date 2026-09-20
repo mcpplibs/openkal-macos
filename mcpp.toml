@@ -1,7 +1,7 @@
 [package]
 namespace   = "mcpplibs"
 name        = "openkal-macos"
-version     = "0.11.0"
+version     = "0.12.0"
 description = "An implementation of openkal for macOS, written on the kernel's own calls. Its purpose is as much to test the specification as to be used."
 license     = "Apache-2.0"
 
@@ -16,6 +16,45 @@ license     = "Apache-2.0"
 provides    = ["mcpp:kernel-abi=openkal"]
 authors     = ["mcpplibs"]
 repo        = "https://github.com/mcpplibs/openkal-macos"
+
+# WHICH INTERFACES OF THAT LAYER THIS PACKAGE PROVIDES (mcpp 2026.9.20.1).
+# The engine compares this set against a consumer's `requires-interfaces` at
+# dependency resolution and refuses before anything is compiled; it learns no
+# interface name from it --- both lists are opaque strings and the only
+# operation is a set difference, so the specification may add an interface
+# without a release of the engine.
+#
+# NOT WRITTEN BY HAND. The step "The exported surface is complete and contains
+# nothing else" regenerates this array from the objects this package builds and
+# fails the run if the two disagree. It is clause 9's surface comparison
+# stopped one step earlier: the walk that decides whether each group is
+# exported whole already answers which interfaces this implementation provides,
+# so regenerating is the same derivation rather than a second one. A
+# declaration derived from the thing it describes cannot disagree with it, and
+# an implementation that gains an interface cannot forget to say so.
+#
+# BACKWARD COMPATIBLE. An engine that predates the key reads `[kernel-abi]` as
+# an unknown top-level table and ignores it, so this manifest loads unchanged
+# everywhere it loaded before; the absence of the check is the behaviour that
+# release already had. Measured against the published 2026.9.18.3 archive.
+[kernel-abi]
+provides-interfaces = [
+    "openkal.abort",
+    "openkal.stream",
+    "openkal.memory",
+    "openkal.env",
+    "openkal.time",
+    "openkal.random",
+    "openkal.fs",
+    "openkal.process",
+    "openkal.task",
+    "openkal.exec",
+    "openkal.terminal",
+    "openkal.net",
+    "openkal.datagram",
+    "openkal.space",
+    "openkal.timeout",
+]
 
 [dependencies]
 openkal = "0.14.0"
