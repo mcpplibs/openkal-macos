@@ -40,14 +40,29 @@ constexpr okm_long tiocgeta   = 0x40000000L | (72L << 16) | ('t' << 8) | 19;
 constexpr okm_long tiocseta   = 0x80000000L | (72L << 16) | ('t' << 8) | 20;
 constexpr okm_long tiocgwinsz = 0x40000000L | (8L  << 16) | ('t' << 8) | 104;
 
-// Positions within lflag. This kernel's values, which are not the other's.
+// Positions within lflag and iflag, and the two entries of cc that decide how
+// long a read waits. This kernel's values, which are not the other's.
 constexpr okm_ulong t_echo   = 0x00000008u;
+constexpr okm_ulong t_isig   = 0x00000080u;
 constexpr okm_ulong t_icanon = 0x00000100u;
+constexpr okm_ulong t_iexten = 0x00000400u;
+constexpr okm_ulong t_ixon   = 0x00000200u;   // iflag
+constexpr unsigned  v_min = 16, v_time = 17;
 
+// KAL_TERM_PASS_CONTROL IS READ FROM THREE FLAGS AND NOT FROM ISIG. The
+// position states that the environment reserves NO keystroke, so it is set only
+// where every mechanism by which this kernel reserves one is off: ISIG for the
+// interrupt and its neighbours, IXON for the pair that stops and starts output,
+// IEXTEN for the one that takes the next keystroke literally. A terminal upon
+// which some of them had been released reads as clear and is restored to the
+// set this kernel ordinarily reserves, which is the cost the specification
+// records beside the position.
 kal_uintptr mode_of(const oktermios& t) {
     kal_uintptr m = 0;
     if ((t.lflag & t_icanon) != 0) m |= KAL_TERM_LINE_EDIT;
     if ((t.lflag & t_echo)   != 0) m |= KAL_TERM_ECHO;
+    if ((t.lflag & (t_isig | t_iexten)) == 0 &&
+        (t.iflag & t_ixon) == 0)   m |= KAL_TERM_PASS_CONTROL;
     return m;
 }
 
@@ -81,11 +96,38 @@ int kal_terminal_set_mode(kal_stream s, kal_uintptr mode) {
     oktermios t{};
     const int rc = get_termios(s, t);
     if (rc != kal_ok) return rc;
+    const kal_uintptr in_effect = mode_of(t);
 
     if ((mode & KAL_TERM_LINE_EDIT) != 0) t.lflag |=  t_icanon;
     else                                  t.lflag &= ~t_icanon;
     if ((mode & KAL_TERM_ECHO) != 0)      t.lflag |=  t_echo;
     else                                  t.lflag &= ~t_echo;
+
+    // A POSITION WHOSE REQUESTED VALUE IS THE ONE IN EFFECT IS NOT WRITTEN.
+    // This position stands for three of the kernel's flags, so establishing it
+    // again would settle two mechanisms the caller never asked about: a user
+    // who had released the keystroke that stops output keeps it released while
+    // a program turns the echo off and back on.
+    if (((mode ^ in_effect) & KAL_TERM_PASS_CONTROL) != 0) {
+        if ((mode & KAL_TERM_PASS_CONTROL) != 0) {
+            t.lflag &= ~(t_isig | t_iexten);
+            t.iflag &= ~t_ixon;
+        } else {
+            t.lflag |=  (t_isig | t_iexten);
+            t.iflag |=   t_ixon;
+        }
+    }
+
+    // AND A MODE IS NOT A WAY TO END THE INPUT. With line assembly off, how
+    // long a read waits is decided by VMIN and VTIME rather than by a newline,
+    // and a terminal left at VMIN=0 by whatever ran before makes
+    // `kal_stream_read' report zero --- which clause 7.4 says denotes the end
+    // of the input. A caller that wants a read which gives up asks
+    // `kal_timeout_read' for one.
+    if ((mode & KAL_TERM_LINE_EDIT) == 0) {
+        t.cc[v_min]  = 1;
+        t.cc[v_time] = 0;
+    }
 
     // A position this implementation does not distinguish is ignored rather than
     // refused, which clause 6.2 requires: a program compiled against a later
