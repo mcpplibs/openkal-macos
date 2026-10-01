@@ -17,6 +17,75 @@ namespace {
 
 constexpr kal_uintptr kMaxEntries = 512;
 
+constexpr char     kPreopens[]  = "KAL_PREOPENS=";
+constexpr okm_uptr kPreopensLen = sizeof kPreopens - 1;
+constexpr okm_uptr kPidDigits   = 10;
+
+bool names_preopens(const char* s, kal_uintptr n) {
+    if (n < kPreopensLen) return false;
+    for (okm_uptr i = 0; i < kPreopensLen; ++i)
+        if (s[i] != kPreopens[i]) return false;
+    return true;
+}
+
+okm_uptr digits(okm_uptr v) {
+    okm_uptr n = 1;
+    while (v >= 10) { v /= 10; ++n; }
+    return n;
+}
+
+char* put_decimal(char* o, okm_uptr v) {
+    char b[24]; int i = 0;
+    do { b[i++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);
+    while (i) *o++ = b[--i];
+    return o;
+}
+
+// Every descriptor from `from' upward is marked to close when the image is
+// replaced. This kernel has no `close_range'. What it has is `/dev/fd', which
+// lists the descriptors of the process reading it, so exactly those are marked;
+// where it cannot be read, every number below the descriptor limit is tried,
+// and an unlimited limit is taken as OPEN_MAX, which is the bound this system's
+// own C library applies in the same case.
+void close_on_exec_from(okm_long from) {
+    const okm_long dir = okm::sys(okm::nr_openat, okm::at_fdcwd,
+                                  reinterpret_cast<okm_long>("/dev/fd"),
+                                  okm::o_rdonly | okm::o_directory | okm::o_cloexec, 0);
+    if (!okm::failed(dir)) {
+        alignas(8) char buf[4096];
+        okm_i64 position = 0;
+        for (;;) {
+            const okm_long n = okm::sys(okm::nr_getdirentries64, dir,
+                                        reinterpret_cast<okm_long>(buf),
+                                        static_cast<okm_long>(sizeof buf),
+                                        reinterpret_cast<okm_long>(&position));
+            if (okm::interrupted(n)) continue;
+            if (okm::failed(n) || n == 0) break;
+            for (okm_long at = 0; at < n; ) {
+                const auto* d = reinterpret_cast<const okm::kdirent64*>(buf + at);
+                okm_long fd = 0; bool number = d->namlen > 0;
+                for (unsigned short c = 0; c < d->namlen; ++c) {
+                    if (d->name[c] < '0' || d->name[c] > '9') { number = false; break; }
+                    fd = fd * 10 + (d->name[c] - '0');
+                }
+                if (number && fd >= from && fd != dir)
+                    okm::sys(okm::nr_fcntl, fd, okm::f_setfd, okm::fd_cloexec);
+                if (d->reclen == 0) break;
+                at += d->reclen;
+            }
+        }
+        okm::sys(okm::nr_close, dir);
+        return;
+    }
+
+    okm_u64 lim[2] = { 256, 256 };
+    okm::sys(okm::nr_getrlimit, okm::rlimit_nofile, reinterpret_cast<okm_long>(lim));
+    const okm_u64 bound = lim[0] > static_cast<okm_u64>(okm::open_max)
+                        ? static_cast<okm_u64>(okm::open_max) : lim[0];
+    for (okm_long fd = from; static_cast<okm_u64>(fd) < bound; ++fd)
+        okm::sys(okm::nr_fcntl, fd, okm::f_setfd, okm::fd_cloexec);
+}
+
 // The counted arrays the interface takes become the terminated arrays this
 // kernel takes. Every allocation happens before the program is duplicated, so
 // that the duplicate performs nothing but a few calls: a duplicate of a program
@@ -47,6 +116,83 @@ struct vector {
         }
         slots[n] = nullptr;
         return true;
+    }
+
+    // THE ENVIRONMENT, WHICH CARRIES THE NAMES OF THE GRANTED DIRECTORIES.
+    //
+    // A granted directory reaches the started program as a descriptor, and a
+    // descriptor carries no name. The names travel in one variable,
+    //
+    //     KAL_PREOPENS=<pid>{;<fd>,<len>,<name>}
+    //
+    // which the started program reads when it first enumerates its preopens
+    // (`table' in fs.cpp). The arrangement and its spelling are openkal-linux's,
+    // which takes them from systemd's LISTEN_FDS, LISTEN_FDNAMES and LISTEN_PID;
+    // one spelling on both kernels is what lets a program read its grants
+    // without knowing which implementation started it. It is bound to the
+    // process it was written for in the same way: `<pid>' is ten digits written
+    // by the duplicate once it knows its own number, so a value inherited
+    // through a program that does not read it, a shell for example, names no
+    // one when it arrives one generation further down.
+    //
+    // Every variable of that name the caller supplied is left out, so a value
+    // is never forwarded; one is added only when the caller asked for grants,
+    // and asking for none (a count of zero) is a value with no entries.
+    char*    pid_digits = nullptr;
+
+    bool build_env(const char** items, const kal_uintptr* lens, kal_uintptr n,
+                   const kal_preopen* grants, kal_uintptr g) {
+        if (n > kMaxEntries) { ok = false; return false; }
+        kal_uintptr kept = 0;
+        okm_uptr total = 0;
+        for (kal_uintptr i = 0; i < n; ++i) {
+            if (names_preopens(items[i], lens[i])) continue;
+            ++kept; total += lens[i] + 1;
+        }
+        okm_uptr extra = 0;
+        if (grants) {
+            extra = kPreopensLen + kPidDigits + 1;
+            for (kal_uintptr i = 0; i < g; ++i)
+                extra += 3 + digits(3 + i) + digits(grants[i].len) + grants[i].len;
+        }
+        slots_bytes = (kept + (grants ? 1 : 0) + 1) * sizeof(char*);
+        bytes_bytes = total + extra == 0 ? 1 : total + extra;
+        slots = static_cast<char**>(kal_alloc(slots_bytes, alignof(char*)));
+        bytes = static_cast<char*>(kal_alloc(bytes_bytes, 1));
+        if (!slots || !bytes) { ok = false; return false; }
+        okm_uptr at = 0, k = 0;
+        for (kal_uintptr i = 0; i < n; ++i) {
+            if (names_preopens(items[i], lens[i])) continue;
+            okm::copy(bytes + at, items[i], lens[i]);
+            bytes[at + lens[i]] = '\0';
+            slots[k++] = bytes + at;
+            at += lens[i] + 1;
+        }
+        if (grants) {
+            char* o = bytes + at;
+            slots[k++] = o;
+            okm::copy(o, kPreopens, kPreopensLen); o += kPreopensLen;
+            pid_digits = o;
+            okm::fill(o, '0', kPidDigits); o += kPidDigits;
+            for (kal_uintptr i = 0; i < g; ++i) {
+                *o++ = ';'; o = put_decimal(o, 3 + i);
+                *o++ = ','; o = put_decimal(o, grants[i].len);
+                *o++ = ',';
+                okm::copy(o, grants[i].name, grants[i].len); o += grants[i].len;
+            }
+            *o = '\0';
+        }
+        slots[k] = nullptr;
+        return true;
+    }
+
+    // In the duplicate, which is the first point at which the number is known.
+    void stamp(okm_long pid) const {
+        if (!pid_digits) return;
+        for (int i = static_cast<int>(kPidDigits) - 1; i >= 0; --i) {
+            pid_digits[i] = static_cast<char>('0' + pid % 10);
+            pid /= 10;
+        }
     }
 
     ~vector() {
@@ -205,17 +351,26 @@ int kal_process_spawn(const kal_spawn* how,
     okm::terminated p(path, path_len);
     if (!p.ok) return kal_err_invalid;
 
-    vector args, envs;
-    if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
-    if (!envs.build(envp, envp_lens, envc)) return kal_err_no_memory;
-
+    // Resolved before the duplication, because a failure after it would leave a
+    // duplicate to be reaped and a caller with an error it cannot act upon. A
+    // name travels in the environment, which cannot carry a zero byte.
     constexpr kal_uintptr max_grants = 16;
     if (how->grant_count > max_grants) return kal_err_invalid;
-    int granted[max_grants];
+    okm_long granted[max_grants];
     for (kal_uintptr i = 0; i < how->grant_count; ++i) {
-        granted[i] = okm::unpack(how->grants[i].dir.h);
-        if (granted[i] < 0) return kal_err_invalid;
+        const kal_preopen& g = how->grants[i];
+        const int fd = okm::unpack(g.dir.h);
+        if (fd < 0) return kal_err_invalid;
+        if (g.len > okm::max_name || (g.len > 0 && g.name == nullptr)) return kal_err_invalid;
+        for (kal_uintptr c = 0; c < g.len; ++c)
+            if (g.name[c] == '\0') return kal_err_invalid;
+        granted[i] = fd;
     }
+
+    vector args, envs;
+    if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
+    if (!envs.build_env(envp, envp_lens, envc, how->grants, how->grant_count))
+        return kal_err_no_memory;
 
     // THE PROGRAM'S NAME IS MADE ABSOLUTE BEFORE THE DIRECTORY MOVES, because
     // with no `execveat' the two things `base' and `work' now mean cannot both be
@@ -264,14 +419,48 @@ int kal_process_spawn(const kal_spawn* how,
     // reason, and what happens to an implementation that tests the first alone,
     // are in src/sys.h beside the call.
     if (is_duplicate) {
-        if (in != 0) okm::sys(okm::nr_dup2, in, 0);
-        if (ou != 0) okm::sys(okm::nr_dup2, ou, 1);
-        if (er != 0) okm::sys(okm::nr_dup2, er, 2);
+        // WHAT THE STARTED PROGRAM RECEIVES IS THE THREE STREAMS AND THE GRANTED
+        // DIRECTORIES, AND NOTHING ELSE (SPEC.md clause 7.13).
+        //
+        // Every source is first moved above the positions being filled, because
+        // placing one source on its position must not overwrite another that
+        // still has to be read: a granted directory, a stream or the working
+        // directory may each occupy a number between 0 and 3+n. Placing them one
+        // at a time where they stood let one grant arrive as a copy of another,
+        // and let a placement overwrite the directory the program was to run
+        // in. A source that is moved has its own descriptor flag; `dup2' onto a
+        // different number clears it on the copy it places, including where the
+        // source happened to be the position itself --- which `dup2' left
+        // untouched, still marked to close, so that the grant never arrived.
+        const okm_long top = static_cast<okm_long>(3 + how->grant_count);
+        auto lift = [&](okm_long fd) -> okm_long {
+            const okm_long r = okm::sys(okm::nr_fcntl, fd, okm::f_dupfd_cloexec, top);
+            if (okm::failed(r)) {
+                report.say(r);
+                okm::sys(okm::nr_exit, 127);
+                for (;;) { }
+            }
+            return r;
+        };
+        const okm_long sin = in != 0 ? lift(in) : 0;
+        const okm_long sou = ou != 0 ? lift(ou) : 0;
+        const okm_long ser = er != 0 ? lift(er) : 0;
+        for (kal_uintptr i = 0; i < how->grant_count; ++i) granted[i] = lift(granted[i]);
+        const okm_long work = lift(w);
 
-        for (kal_uintptr i = 0; i < how->grant_count; ++i) {
-            const okm_long want = static_cast<okm_long>(3 + i);
-            if (granted[i] != want) okm::sys(okm::nr_dup2, granted[i], want);
-        }
+        if (sin != 0) okm::sys(okm::nr_dup2, sin, 0);
+        if (sou != 0) okm::sys(okm::nr_dup2, sou, 1);
+        if (ser != 0) okm::sys(okm::nr_dup2, ser, 2);
+        for (kal_uintptr i = 0; i < how->grant_count; ++i)
+            okm::sys(okm::nr_dup2, granted[i], static_cast<okm_long>(3 + i));
+
+        // What the CALLER itself inherited without the flag is not a handle it
+        // granted. A program that starts others inside a sandbox passes every
+        // descriptor it holds to them, and one of those reaching beyond the
+        // sandbox is exactly what the sandbox was for.
+        close_on_exec_from(top);
+
+        envs.stamp(okm::sys(okm::nr_getpid));
 
         // The directory the program RUNS in --- `whole' already carries where it
         // is named from, so this no longer has to serve both.
@@ -280,7 +469,7 @@ int kal_process_spawn(const kal_spawn* how,
         // the wrong directory is the silent wrongness this pipe exists to
         // remove, so it is reported through the same channel an exec failure
         // uses.
-        if (const okm_long e = okm::sys(nr_fchdir, w); okm::failed(e)) {
+        if (const okm_long e = okm::sys(nr_fchdir, work); okm::failed(e)) {
             report.say(e);
             okm::sys(okm::nr_exit, 127);
             for (;;) { }
