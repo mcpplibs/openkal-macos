@@ -118,11 +118,14 @@ nothing ever wakes. That is not a substitute for a sleep; it is a sleep,
 expressed with the operation this system has.
 
 **There is no kernel call that starts a program relative to a directory.** The
-directory is entered by the duplicate before it replaces itself — a duplicate
-that exists for the length of two calls and is not a resource the caller
+program's name is made absolute from the path of the base directory
+(`F_GETPATH`) before the program is duplicated, and the duplicate enters the
+working directory the caller named before it replaces itself --- a duplicate
+that exists for the length of a few calls and is not a resource the caller
 receives, which is exactly what openkal declines to offer as an operation of its
 own. The caller's working directory is untouched, which is the property the
-interface requires.
+interface requires. Because the program is started by its absolute name, no
+descriptor has to survive the start for a program that needs an interpreter.
 
 **A started program receives the three streams and its grants, and nothing
 else.** Clause 7.13. Every source is first moved above the positions being
