@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.14.0"
+openkal = "0.14.1"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.12.0"
+openkal-macos = "0.12.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -123,6 +123,28 @@ that exists for the length of two calls and is not a resource the caller
 receives, which is exactly what openkal declines to offer as an operation of its
 own. The caller's working directory is untouched, which is the property the
 interface requires.
+
+**A started program receives the three streams and its grants, and nothing
+else.** Clause 7.13. Every source is first moved above the positions being
+filled, so that placing one cannot overwrite another; everything above the
+grants is then marked to close on replacement, including what the calling
+program itself inherited. This kernel has no `close_range`: the descriptors are
+read from `/dev/fd`, which lists those of the process reading it, and where it
+cannot be read every number below the descriptor limit is marked, an unlimited
+limit being taken as `OPEN_MAX`. No program keeps a descriptor for its own file,
+because the program is started by its whole name rather than through a
+descriptor, and an interpreter reopens that name.
+
+**Granted directories are named in the environment.** A grant arrives as a
+descriptor at 3 and upward, and its name in the variable
+`KAL_PREOPENS=<pid>{;<fd>,<len>,<name>}`, spelled as openkal-linux spells it.
+`<pid>` is written by the started process itself, so a value inherited through a
+program that does not read it names no one. A program started with grants
+enumerates exactly those directories, the first of which is the directory it
+regards as the one it was started in; a program started without them enumerates
+the working directory and `/`, as before. A grant names directories to a program
+that confines itself to its preopens; it does not confine a program that opens
+`/` on its own, which is the environment's responsibility (clause 11, entry 6).
 
 **The suspension primitive exists here too.** `openkal.task` declares its
 boundary as a wait upon a word. This kernel offers that operation under a

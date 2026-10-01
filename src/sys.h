@@ -189,6 +189,9 @@ enum : okm_long {
     nr_fstatat64 = 470, nr_unlinkat = 472, nr_readlinkat = 473,
     nr_symlinkat = 474, nr_fstatfs64 = 346, nr_sysctl = 202,
     nr_mkdirat = 475,
+    // The descriptor limit, read when the descriptors a process holds cannot be
+    // listed (src/process.cpp). This kernel has no `close_range'.
+    nr_getrlimit = 194,
     // openkal 0.13: whether a node may be started
     nr_fchmodat = 467,
     nr_ulock_wait = 515, nr_ulock_wake = 516,
@@ -291,6 +294,10 @@ enum : okm_long {
     // number would close whatever a granted directory already occupies there.
     // 67 is this kernel's own value and is not the other kernel's 1030.
     f_dupfd_cloexec = 67,
+
+    // The resource whose limit bounds a descriptor's number, and the bound this
+    // system's own C library applies when that limit is unlimited.
+    rlimit_nofile = 8, open_max = 10240,
 
     // sysctl: how many processors this machine runs at once.
     ctl_hw = 6, hw_ncpu = 3,

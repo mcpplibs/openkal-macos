@@ -3,6 +3,8 @@
 #include <openkal/fs.h>
 #include <openkal/memory.h>
 
+namespace okm { extern char** g_envp; }
+
 namespace {
 
 // The directories this implementation supplies. A hosted system does not
@@ -19,11 +21,74 @@ struct preopen { const char* name; kal_uintptr len; okm_uptr handle; };
 
 char g_cwd[1024];
 
+constexpr kal_uintptr kMaxGrants = 16;
+
+// THE DIRECTORIES A STARTER GRANTED, WHEN THE PROGRAM WAS STARTED WITH GRANTS.
+//
+// They arrive as descriptors at 3 and upward, and their names in the variable
+// `kal_process_spawn' writes (see `vector::build_env' in process.cpp):
+//
+//     KAL_PREOPENS=<pid>{;<fd>,<len>,<name>}
+//
+// The value is read only when `<pid>' is this process, so one inherited through
+// a program that does not read it is not mistaken for a grant. A descriptor that
+// is not a directory is reported as a preopen this program may not use, which is
+// how an entry that could not be opened is reported anyway. Each descriptor is
+// marked to close on replacement as it is taken over, so that a grant reaches
+// the program it was made to and not that program's own children (SPEC.md
+// clause 7.13). The names point into the environment, which lives as long as
+// the program does.
+//
+// Answers false when there is no such value, which leaves the directories this
+// implementation supplies by default.
+bool granted(preopen* t, kal_uintptr* n) {
+    constexpr char key[] = "KAL_PREOPENS=";
+    constexpr okm_uptr key_len = sizeof key - 1;
+    const char* v = nullptr;
+    for (char** e = okm::g_envp; e && *e; ++e) {
+        okm_uptr i = 0;
+        while (i < key_len && (*e)[i] == key[i]) ++i;
+        if (i == key_len) { v = *e + key_len; break; }
+    }
+    if (v == nullptr) return false;
+
+    auto number = [&](okm_uptr& out) {
+        if (*v < '0' || *v > '9') return false;
+        out = 0;
+        while (*v >= '0' && *v <= '9') out = out * 10 + static_cast<okm_uptr>(*v++ - '0');
+        return true;
+    };
+    okm_uptr pid = 0;
+    if (!number(pid) || static_cast<okm_long>(pid) != okm::sys(okm::nr_getpid)) return false;
+
+    kal_uintptr k = 0;
+    while (*v == ';' && k < kMaxGrants) {
+        ++v;
+        okm_uptr fd = 0, len = 0;
+        if (!number(fd) || *v++ != ',' || !number(len) || *v++ != ',') return false;
+        for (okm_uptr i = 0; i < len; ++i) if (v[i] == '\0') return false;
+
+        okm::kstat64 st{};
+        const bool dir = !okm::failed(okm::sys(okm::nr_fstat64, static_cast<okm_long>(fd),
+                                               reinterpret_cast<okm_long>(&st)))
+                      && (okm::stat_mode(st) & okm::s_ifmt) == okm::s_ifdir;
+        if (dir) okm::sys(okm::nr_fcntl, static_cast<okm_long>(fd), okm::f_setfd, okm::fd_cloexec);
+        t[k++] = { v, len, dir ? okm::pack(static_cast<int>(fd)) : 0u };
+        v += len;
+    }
+    if (*v != '\0') return false;
+    *n = k;
+    return true;
+}
+
 preopen* table(kal_uintptr* count) {
-    static preopen t[2];
+    static preopen t[kMaxGrants];
+    static kal_uintptr n = 2;
     static bool opened = false;
     if (!opened) {
         opened = true;
+        if (granted(t, &n)) { if (count) *count = n; return t; }
+        n = 2;
         // The name of the working directory. This kernel has no call that
         // reports it: the directory is opened and asked what name it was
         // reached by, which is the operation this system supplies instead and
@@ -51,7 +116,7 @@ preopen* table(kal_uintptr* count) {
         t[0] = { g_cwd, cwd_len, okm::failed(fd0) ? 0u : okm::pack(static_cast<int>(fd0)) };
         t[1] = { "/",   1,       okm::failed(fd1) ? 0u : okm::pack(static_cast<int>(fd1)) };
     }
-    if (count) *count = 2;
+    if (count) *count = n;
     return t;
 }
 
