@@ -303,7 +303,7 @@ jobs:
       # The property version 0.3 exists for. The assertion is made against the
       # objects rather than against the source, because a source can reach a C
       # library through a macro.
-      - name: The objects reference nothing of a C library but the two named
+      - name: The objects reference nothing of a C library but the names named
         run: |
           # Both profiles: an optimizing compiler turns a counting loop into
           # `strlen', which the dev profile never shows (hence -fno-builtin).
@@ -319,8 +319,16 @@ jobs:
           #     from ordinary loops. They compute rather than call, so none of
           #     them can re-enter this implementation.
           #   clock_gettime_nsec_np,
-          #   pthread_create_from_mach_thread   the two names no C library
-          #     defines, which is why they are reachable from here at all.
+          #   pthread_create_from_mach_thread,
+          #   _pthread_self,
+          #   pthread_get_stackaddr_np,
+          #   pthread_get_stacksize_np   names no C library in this ecosystem
+          #     defines, which is why they are reachable from here at all. The
+          #     last three answer the stack of the calling thread (openkal
+          #     0.15, clause 11 entry 21), and the underscored spelling of the
+          #     first is deliberate: `pthread_self' IS a name musl defines, and
+          #     this system's library would be handed a thread record of
+          #     another library's layout.
           #   __libc_start_main, main, _main    the hand-over, undefined here by
           #     construction.
           #   kal_*                             the interface itself.
@@ -340,7 +348,7 @@ jobs:
           #   ___dso_handle                     likewise the format's: emitted
           #     beside the weak references above, defined by the image's own
           #     start files.
-          permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|pthread_create|pthread_join|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume|__dso_handle|section\$(start|end)\$__TEXT\$__(eh_frame|unwind_info))$'
+          permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|pthread_create|pthread_join|_pthread_self|_pthread_get_stackaddr_np|_pthread_get_stacksize_np|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume|__dso_handle|section\$(start|end)\$__TEXT\$__(eh_frame|unwind_info))$'
           # Reported with the object that references it. A symbol without the
           # object it came from names a fault and not a place, and the first
           # time this check fired the answer was in the object rather than in
@@ -356,7 +364,7 @@ jobs:
             done
           done
           test "$bad" -eq 0
-          echo "the implementation reaches nothing of a C library but the two names that are named ($profile)"
+          echo "the implementation reaches nothing of a C library but the names that are named ($profile)"
           done
 
       # A checker is only useful if it fails when it should.

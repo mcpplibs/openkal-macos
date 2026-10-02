@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.14.1"
+openkal = "0.15.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.12.1"
+openkal-macos = "0.13.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -155,6 +155,33 @@ different name and with no shared ancestry with the one Linux offers. That two
 unrelated systems provide it is the evidence that it is the shape of the thing
 rather than the shape of one kernel — and version 0.2, which built the primitive
 out of a mutex and a condition variable, had this backwards.
+
+## The region a context stands on
+
+`kal_task_stack` reports the stack of the calling context, and this
+implementation asks the library that arranged the thread rather than measuring
+anything: `_pthread_self` names the caller and the two `_np` enquiries answer
+where its stack is. Nothing here can be wrong in the way a computed bound can,
+because no bound is computed.
+
+The three names are chosen the way this implementation chooses every name it
+takes from that library: a name is reachable from here when no C library in this
+ecosystem defines it. `pthread_self` is a name musl defines --- so the
+underscored `_pthread_self` is the one called, and the ordinary spelling would
+have handed this system's library a thread record of another library's layout.
+Neither `pthread_get_stackaddr_np` nor `pthread_get_stacksize_np` is defined by
+any C library here, so both are called as they are spelled.
+
+The answer is the library's own: the reservation for a thread whose stack the
+limit sizes, and the usable mapping for one whose stack was allocated. The
+specification does not require an implementation to tell the two apart, and this
+one does not.
+
+The pair is what the cross-link finds, not what the source reads. A Mach-O
+symbol carries one more underscore than its C name, so `_pthread_self` is
+`__pthread_self` in `port/libSystem.tbd` while the two `_np` names are not ---
+measured by linking a program that calls the enquiry and reading what the linker
+asked for, which is also how the stub's list was produced.
 
 ## Conformance
 

@@ -56,6 +56,29 @@ int pthread_create(void** thread, const void* attr,
                    void* (*start)(void*), void* arg);
 int pthread_join(void* thread, void** value);
 #endif
+
+// THE STACK OF THE CALLING THREAD, AND THE THREE NAMES FOLLOW THE RULE THE
+// COMMENT ABOVE STATES RATHER THAN A PREFERENCE: a name is reachable from here
+// when no C library in this ecosystem defines it, because a program above may
+// define every ordinary one and the call would then resolve into the program.
+//
+// `pthread_self' IS a name musl defines, so the UNDERSCORED `_pthread_self' is
+// the one called: this system's library defines it, musl does not (musl's own
+// is `__pthread_self', and it is a static inline rather than a symbol), and
+// this system's library would otherwise be handed a thread record of another
+// library's layout.
+//
+// Neither `pthread_get_stackaddr_np' nor `pthread_get_stacksize_np' is defined
+// by any C library in this ecosystem, so both are taken as they are spelled.
+// Each answers about the thread it is given, and the thread given is the
+// caller's, because a context is the only resource its own code stands on
+// (SPEC 0.15, clause 11 entry 21). The first answers the BASE, which on this
+// system is the highest address of the stack; the second answers the distance
+// from there to the lowest address the thread may use, the guard page below it
+// excluded.
+void*         _pthread_self(void);
+void*         pthread_get_stackaddr_np(void* thread);
+unsigned long pthread_get_stacksize_np(void* thread);
 }
 
 namespace {
@@ -141,6 +164,33 @@ int kal_task_join(kal_task h) {
 void kal_task_yield(void) { okm::relax(); }
 
 kal_uintptr kal_task_current(void) { return okm::current_context(); }
+
+// The stack the calling context runs on. Version 0.15.
+//
+// ASKED OF THE LIBRARY THAT ALLOCATED IT, AND ABOUT THE CALLER. There is no
+// measurement here to get wrong, and no record for this implementation to keep:
+// the library that arranged the thread's state is the one that knows where the
+// stack it arranged begins, and it is asked about the thread that is asking.
+// The region is the library's own answer, which is the reservation for a thread
+// whose stack is sized by the limit and the usable mapping for one whose stack
+// was allocated --- exactly the two cases SPEC clause 11 entry 21 distinguishes
+// and does not require an implementation to tell apart.
+int kal_task_stack(void** base, kal_uintptr* size) {
+    if (base == nullptr || size == nullptr) return kal_err_invalid;
+
+    void* self = _pthread_self();
+    if (self == nullptr) return kal_err_io;
+
+    auto* bottom = static_cast<unsigned char*>(pthread_get_stackaddr_np(self));
+    const unsigned long bytes = pthread_get_stacksize_np(self);
+    if (bottom == nullptr || bytes == 0) return kal_err_io;
+
+    // The base is where the stack stops, and the library answered with where it
+    // starts.
+    *base = bottom - bytes;
+    *size = static_cast<kal_uintptr>(bytes);
+    return kal_ok;
+}
 
 int kal_task_wait(const kal_u32* word, kal_u32 expected,
                   kal_u64 timeout_ns) {
