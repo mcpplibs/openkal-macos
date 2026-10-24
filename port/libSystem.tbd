@@ -28,10 +28,13 @@ targets:         [ arm64-macos, x86_64-macos ]
 install-name:    '/usr/lib/libSystem.B.dylib'
 current-version: 1351.0.0
 #
-# FIVE NAMES ARE CALLED AND ONE IS NOT.
+# EIGHT NAMES ARE CALLED AND ONE IS NOT.
 #
-# The first four are names this implementation CALLS, and the enumeration above
-# found them. The three that 0.13.0 added answer the stack of the calling
+# The first five are names this implementation CALLS, and the enumeration above
+# found them. The three `_libSystem_atfork_*' that 0.14.1 added are the
+# preparation `fork' performs around the primitive, which a duplicate made by
+# kal_space_start needs before it can start a thread (mcpplibs/openkal-musl#55).
+# The three that 0.13.0 added answer the stack of the calling
 # thread (openkal 0.15, clause 11 entry 21), and they follow the same rule as
 # the two before them: this system's library defines them and no C library in
 # this ecosystem does, which is what makes them reachable from an
@@ -54,7 +57,9 @@ current-version: 1351.0.0
 # evidence about a format.
 exports:
   - targets:     [ arm64-macos, x86_64-macos ]
-    symbols:     [ _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
+    symbols:     [ __libSystem_atfork_child, __libSystem_atfork_parent,
+                   __libSystem_atfork_prepare,
+                   _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
                    _pthread_get_stackaddr_np, _pthread_get_stacksize_np,
                    __pthread_self, dyld_stub_binder ]
 ...

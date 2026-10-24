@@ -19,6 +19,25 @@
 
 extern "C" {
 
+// THE SYSTEM LIBRARY'S OWN PREPARATION FOR A DUPLICATE, WITHOUT WHICH THE
+// DUPLICATE CANNOT START A THREAD.
+//
+// This system's `fork' is not only the primitive: around it the system library
+// takes its own locks, and in the duplicate it makes the library's state true
+// of the new process --- among the rest, the name of the task, which a
+// duplicate receives anew and through which the thread library allocates every
+// stack. The primitive alone left the duplicate holding the original's state,
+// and the first thread it asked for failed: measured, `pthread_create' returned
+// EAGAIN in a duplicate made here and 0 in the original (mcpplibs/openkal-musl#55).
+//
+// The three are the ones `fork' itself calls, under names no C library in this
+// ecosystem defines, so they are reachable beneath one as above one. They are
+// called in the order `fork' calls them: before the primitive, and then in each
+// image the one that belongs to it.
+void _libSystem_atfork_prepare(void);
+void _libSystem_atfork_parent(void);
+void _libSystem_atfork_child(void);
+
 int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
                     kal_process* out) {
     if (entry == nullptr || out == nullptr) return kal_err_invalid;
@@ -31,10 +50,12 @@ int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
     (void)stack_top;
 
     bool is_duplicate = false;
+    _libSystem_atfork_prepare();
     const okm_long child = okm::duplicate(is_duplicate);
-    if (okm::failed(child)) return okm::translate(child);
+    if (okm::failed(child)) { _libSystem_atfork_parent(); return okm::translate(child); }
 
     if (is_duplicate) {
+        _libSystem_atfork_child();
         entry(arg);
         // THE ENTRY IS NOT REQUIRED TO RETURN, AND IF IT DOES THE CONTEXT ENDS.
         //
@@ -46,6 +67,7 @@ int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
         for (;;) okm::sys(okm::nr_exit, 0);
     }
 
+    _libSystem_atfork_parent();
     *out = kal_process{ static_cast<kal_uintptr>(child) };
     return kal_ok;
 }
