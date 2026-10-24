@@ -55,6 +55,10 @@ int pthread_create_from_mach_thread(void** thread, const void* attr,
 int pthread_create(void** thread, const void* attr,
                    void* (*start)(void*), void* arg);
 int pthread_join(void* thread, void** value);
+int pthread_attr_init(void* attr);
+int pthread_attr_destroy(void* attr);
+int pthread_attr_setstacksize(void* attr, unsigned long size);
+int pthread_attr_setguardsize(void* attr, unsigned long size);
 #endif
 
 // THE STACK OF THE CALLING THREAD, AND THE THREE NAMES FOLLOW THE RULE THE
@@ -81,7 +85,61 @@ void*         pthread_get_stackaddr_np(void* thread);
 unsigned long pthread_get_stacksize_np(void* thread);
 }
 
+namespace okm {
+
+// THE ATTRIBUTES A THREAD IS STARTED WITH, COMPOSED HERE BECAUSE THE NAMES THAT
+// WOULD COMPOSE THEM ARE NOT REACHABLE.
+//
+// `pthread_attr_init' and its setters are names musl defines, so beneath a C
+// library a call to them resolves into that library and writes its layout, not
+// this system's. `pthread_create_from_mach_thread' is reachable and takes the
+// system's attributes, so the structure is composed directly: the 64 bytes
+// `pthread_attr_init' writes, with the size and the guard set as the two setters
+// set them. THE LAYOUT IS THE SYSTEM LIBRARY'S AND IS NOT DOCUMENTED, so it is
+// not trusted from memory: tests/conformance_stack_size.cpp composes it beside
+// the system library's own functions on every run and compares the bytes, and a
+// system that changed it turns that test red rather than starting threads with
+// a structure it does not recognise. The library also checks the signature
+// word and refuses a structure without it, which is the failure an unknown
+// layout produces at worst.
+struct thread_attr { okm_u64 word[8]; };
+
+void compose_thread_attr(thread_attr* a, okm_uptr stack, okm_uptr guard) {
+    fill(a, 0, sizeof *a);
+    a->word[0] = 0x54484441u;           // the signature, "THDA"
+    a->word[1] = guard;                 // the guard, in bytes
+    a->word[3] = stack;                 // the size, in bytes
+    a->word[4] = 0x8ffu;                // the default class of service
+    // joinable, inherited scheduling, the ordinary policy; the bit that says
+    // the guard is the default one is clear because a guard is stated.
+    a->word[5] = 0x00010101u;
+}
+
+}  // namespace okm
+
 namespace {
+
+// THE SIZE A CONTEXT IS GIVEN WHEN IT ASKS FOR NONE. This system gives a thread
+// 512 KiB unless told otherwise, and the two other implementations give one
+// the 8 MiB the host's C library does; a program that asks for nothing --- C++'s
+// `std::thread' cannot ask --- is given the same room on all three. The region
+// is reserved and committed as it is touched, so the size costs address space.
+constexpr okm_uptr kDefaultStack = 8u * 1024u * 1024u;
+
+// A guard larger than this system's one page, for the reason the Linux
+// implementation gives: a frame of 69,008 bytes was measured in the C library
+// above at -O0, and a frame larger than the guard steps over it.
+constexpr okm_uptr kGuard = 256u * 1024u;
+
+// The size is a multiple of this system's page, which is 16 KiB on one of its
+// two processors; a multiple of that is a multiple of the other's too.
+constexpr okm_uptr kGranule = 16u * 1024u;
+
+okm_uptr stack_for(okm_uptr want) {
+    if (want > (okm_uptr{1} << 46)) return 0;
+    const okm_uptr w = (want + kGranule - 1) & ~(kGranule - 1);
+    return w > kDefaultStack ? w : kDefaultStack;
+}
 
 struct context {
     void (*entry)(void*);
@@ -118,26 +176,56 @@ int translate_posix(int e) {
 
 }  // namespace
 
-extern "C" {
+namespace {
 
-int kal_task_start(void (*entry)(void*), void* arg, kal_task* out) {
+int start(void (*entry)(void*), void* arg, okm_uptr want, kal_task* out) {
     if (entry == nullptr || out == nullptr) return kal_err_invalid;
+    const okm_uptr bytes = stack_for(want);
+    if (bytes == 0) return kal_err_no_memory;
     auto* c = static_cast<context*>(kal_alloc(sizeof(context), alignof(context)));
     if (c == nullptr) return kal_err_no_memory;
     okm::fill(c, 0, sizeof(context));
     c->entry = entry; c->arg = arg;
 
 #ifdef OKM_STANDALONE
+    okm::thread_attr attr;
+    okm::compose_thread_attr(&attr, bytes, kGuard);
     void* thread = nullptr;
-    const int rc = pthread_create_from_mach_thread(&thread, nullptr, run, c);
+    const int rc = pthread_create_from_mach_thread(&thread, &attr, run, c);
 #else
+    okm::thread_attr attr;
+    pthread_attr_init(&attr);
+    int rc = pthread_attr_setstacksize(&attr, bytes);
+    if (rc == 0) rc = pthread_attr_setguardsize(&attr, kGuard);
     void* id = nullptr;
-    const int rc = ::pthread_create(&id, nullptr, run, c);
+    if (rc == 0) rc = ::pthread_create(&id, &attr, run, c);
+    pthread_attr_destroy(&attr);
     if (rc == 0) c->thread = static_cast<unsigned long>(reinterpret_cast<okm_uptr>(id));
 #endif
-    if (rc != 0) { kal_free(c, sizeof(context), alignof(context)); return translate_posix(rc); }
+    if (rc != 0) {
+        kal_free(c, sizeof(context), alignof(context));
+        // A size the library refuses, or memory it cannot reserve, is the
+        // exhaustion kal_task_start_sized states.
+        return (rc == okm::e_inval || rc == okm::e_nomem) && want != 0 ? kal_err_no_memory
+                                                                        : translate_posix(rc);
+    }
     *out = kal_task{ reinterpret_cast<kal_uintptr>(c) };
     return kal_ok;
+}
+
+}  // namespace
+
+extern "C" {
+
+int kal_task_start(void (*entry)(void*), void* arg, kal_task* out) {
+    return start(entry, arg, 0, out);
+}
+
+// A least size, version 0.16: at least the size asked for, and never less than
+// the default.
+int kal_task_start_sized(void (*entry)(void*), void* arg, kal_uintptr stack_size,
+                         kal_task* out) {
+    return start(entry, arg, stack_size, out);
 }
 
 int kal_task_join(kal_task h) {
