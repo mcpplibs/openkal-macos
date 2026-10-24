@@ -13,6 +13,8 @@
 // against what the system library itself writes; a system that changed it turns
 // this red rather than starting threads with a structure it does not recognise.
 #include <pthread.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -56,6 +58,19 @@ void room(void* p) {
     __atomic_store_n(&q->done, 1, __ATOMIC_RELEASE);
 }
 
+// A read one byte below the region the context is told of. The guard this
+// implementation asks for is there, so the read ends the program it is made in;
+// it is made in a copy, and the copy's end is what is observed.
+void touch_below(void*) {
+    void* base = nullptr; kal_uintptr size = 0;
+    if (kal_task_stack(&base, &size) != kal_ok || base == nullptr) _exit(2);
+    fprintf(stderr, "touch: base=%p size=%lu reading %p\n", base, (unsigned long)size,
+            static_cast<void*>(static_cast<char*>(base) - 1));
+    volatile char c = *(static_cast<volatile char*>(base) - 1);
+    (void)c;
+    _exit(0);
+}
+
 void dump(const char* what, const void* p) {
     const auto* w = static_cast<const unsigned long long*>(p);
     fprintf(stderr, "%s:", what);
@@ -95,6 +110,19 @@ int main() {
     check(kal_task_start(room, &d, &t) == kal_ok, "a context starts");
     kal_task_join(t);
     check(d.told >= (8u << 20), "a context that asks for nothing is given 8 MiB");
+
+    const pid_t child = fork();
+    if (child == 0) {
+        kal_task g{};
+        if (kal_task_start(touch_below, nullptr, &g) == kal_ok) kal_task_join(g);
+        _exit(3);
+    }
+    int status = 0;
+    if (child > 0 && waitpid(child, &status, 0) == child) {
+        fprintf(stderr, "guard: exited=%d status=%d signalled=%d\n", WIFEXITED(status),
+                WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status));
+        check(WIFSIGNALED(status), "a read below a started context's stack faults");
+    }
 
     kal_task never{};
     check(kal_task_start_sized(room, nullptr, ~kal_uintptr{0} - 4095, &never) == kal_err_no_memory,
