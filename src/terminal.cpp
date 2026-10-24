@@ -47,6 +47,17 @@ constexpr okm_ulong t_isig   = 0x00000080u;
 constexpr okm_ulong t_icanon = 0x00000100u;
 constexpr okm_ulong t_iexten = 0x00000400u;
 constexpr okm_ulong t_ixon   = 0x00000200u;   // iflag
+// The four mechanisms by which this kernel alters input on its way --- clearing
+// the high bit, rewriting a line feed into a carriage return, discarding a
+// carriage return, and rewriting a carriage return into a line feed ---
+// which KAL_TERM_PASS_INPUT stands for together. The last is the one applied
+// ordinarily, and the one that made the return key and Ctrl+J the same byte
+// (mcpplibs/openkal#48). Values from <sys/termios.h>, iflag.
+constexpr okm_ulong t_istrip = 0x00000020u;
+constexpr okm_ulong t_inlcr  = 0x00000040u;
+constexpr okm_ulong t_igncr  = 0x00000080u;
+constexpr okm_ulong t_icrnl  = 0x00000100u;
+constexpr okm_ulong kAlters  = t_istrip | t_inlcr | t_igncr | t_icrnl;
 constexpr unsigned  v_min = 16, v_time = 17;
 
 // KAL_TERM_PASS_CONTROL IS READ FROM THREE FLAGS AND NOT FROM ISIG. The
@@ -63,6 +74,7 @@ kal_uintptr mode_of(const oktermios& t) {
     if ((t.lflag & t_echo)   != 0) m |= KAL_TERM_ECHO;
     if ((t.lflag & (t_isig | t_iexten)) == 0 &&
         (t.iflag & t_ixon) == 0)   m |= KAL_TERM_PASS_CONTROL;
+    if ((t.iflag & kAlters) == 0)  m |= KAL_TERM_PASS_INPUT;
     return m;
 }
 
@@ -116,6 +128,14 @@ int kal_terminal_set_mode(kal_stream s, kal_uintptr mode) {
             t.lflag |=  (t_isig | t_iexten);
             t.iflag |=   t_ixon;
         }
+    }
+
+    // The same rule for the position that stands for four flags. Clearing it
+    // restores what this kernel ordinarily applies: the rewriting of a
+    // carriage return, and none of the other three.
+    if (((mode ^ in_effect) & KAL_TERM_PASS_INPUT) != 0) {
+        if ((mode & KAL_TERM_PASS_INPUT) != 0) t.iflag &= ~kAlters;
+        else                                   t.iflag |=  t_icrnl;
     }
 
     // AND A MODE IS NOT A WAY TO END THE INPUT. With line assembly off, how
