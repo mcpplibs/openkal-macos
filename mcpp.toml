@@ -70,6 +70,21 @@ flags = [
                                  "-fno-stack-protector", "-fno-builtin"] },
 ]
 
+# THREE NAMES THE SYSTEM LIBRARY EXPORTS AND ITS DEVELOPMENT STUB DOES NOT LIST.
+#
+# kal_space_start calls the preparations this system's `fork' performs around
+# the duplication primitive (src/space.cpp, mcpplibs/openkal-musl#55). The
+# library exports them --- `fork' lives in one of its parts and calls them in
+# another --- and the stub a native link reads omits them, because they are not
+# part of the interface the system documents. `-U' states that a name may be
+# left for the loader to find among the images it has loaded, which is where
+# it is. A link made elsewhere reads port/libSystem.tbd, which lists them, and
+# is unaffected. The flags reach every program above this package: mcpp
+# forwards a dependency's `ldflags' to its consumer's link.
+ldflags = ["-Wl,-U,__libSystem_atfork_prepare",
+           "-Wl,-U,__libSystem_atfork_parent",
+           "-Wl,-U,__libSystem_atfork_child"]
+
 [features]
 default = []
 
