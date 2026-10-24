@@ -255,11 +255,84 @@ kal_uintptr put_name(const char* src, kal_uintptr n,
 // enumerations of one directory would consume each other's entries.
 struct listing {
     int      fd;
+    int      dir;      // the descriptor of the directory it was begun upon
+    listing* next;
+    int      busy;     // a context is inside kal_fs_list_next with it
+    int      doomed;   // its directory was closed while it was busy
     okm_i64  position;
     okm_uptr used;
     okm_uptr at;
     char     buf[8192];
 };
+
+// THE ENUMERATIONS NOT YET READ TO THE END, BECAUSE CLOSING THE DIRECTORY MUST
+// END THEM. fs.h releases an iterator "by reading past the end or by closing
+// the directory that produced it", and the descriptor a listing holds is its
+// own, so closing the directory's descriptor does not reach it. Measured on the
+// Linux implementation, which had the same shape (mcpplibs/openkal-linux#34): a
+// C library above that stopped reading a directory early kept a descriptor for
+// every directory it closed. This system's default limit is 256 descriptors,
+// so the same program ran out four times sooner here.
+//
+// The lock spins rather than suspends, because suspending would make
+// openkal.fs depend upon openkal.task, as src/memory.cpp says of its own.
+listing*     g_listings = nullptr;
+volatile int g_listings_held = 0;
+
+void listings_lock() {
+    while (__atomic_exchange_n(&g_listings_held, 1, __ATOMIC_ACQUIRE)) okm::relax();
+}
+void listings_unlock() { __atomic_store_n(&g_listings_held, 0, __ATOMIC_RELEASE); }
+
+void listing_release(listing* s) {
+    okm::sys(okm::nr_close, s->fd);
+    kal_free(s, sizeof(listing), alignof(listing));
+}
+
+// Ends every listing begun upon `dir'. A listing another context is reading is
+// marked rather than released, and that context releases it on its way out:
+// clause 6.6 requires that concurrent operations upon one handle not damage
+// this implementation's state, and freeing a buffer the kernel is writing into
+// would.
+void listings_end(int dir) {
+    listing* done = nullptr;
+    listings_lock();
+    for (listing** p = &g_listings; *p != nullptr;) {
+        listing* s = *p;
+        if (s->dir != dir || s->doomed) { p = &s->next; continue; }
+        if (s->busy) { s->doomed = 1; p = &s->next; continue; }
+        *p = s->next; s->next = done; done = s;
+    }
+    listings_unlock();
+    while (done != nullptr) { listing* s = done; done = s->next; listing_release(s); }
+}
+
+// Takes `s' for the calling context, or reports that it is not an open listing
+// of `dir'. The word is found among the open listings rather than read through,
+// so a stale iterator is refused rather than followed.
+bool listing_take(listing* s, int dir) {
+    for (;;) {
+        listings_lock();
+        listing* p = g_listings;
+        while (p != nullptr && p != s) p = p->next;
+        if (p == nullptr || p->dir != dir || p->doomed) { listings_unlock(); return false; }
+        if (!p->busy) { p->busy = 1; listings_unlock(); return true; }
+        listings_unlock();
+        okm::relax();
+    }
+}
+
+void listing_give(listing* s, bool ended) {
+    listings_lock();
+    s->busy = 0;
+    const bool release = ended || s->doomed;
+    if (release) {
+        for (listing** p = &g_listings; *p != nullptr; p = &(*p)->next)
+            if (*p == s) { *p = s->next; break; }
+    }
+    listings_unlock();
+    if (release) listing_release(s);
+}
 
 }  // namespace
 
@@ -312,7 +385,11 @@ int kal_fs_open(kal_dir base, const char* name, kal_uintptr len,
 
 void kal_fs_close_dir(kal_dir d) {
     const int fd = okm::unpack(d.h);
-    if (fd >= 0) { okm::retire(d.h); okm::sys(okm::nr_close, fd); }
+    if (fd < 0) return;
+    // Before the close, because after it the number may already name another
+    // directory whose enumerations are not this one's.
+    listings_end(fd);
+    okm::retire(d.h); okm::sys(okm::nr_close, fd);
 }
 
 void kal_fs_close_file(kal_file f) {
@@ -590,16 +667,22 @@ int kal_fs_list_begin(kal_dir d, kal_uintptr* iter) {
     if (okm::failed(own)) return okm::translate(own);
     auto* s = static_cast<listing*>(kal_alloc(sizeof(listing), alignof(listing)));
     if (s == nullptr) { okm::sys(okm::nr_close, own); return kal_err_no_memory; }
-    s->fd = static_cast<int>(own); s->position = 0; s->used = 0; s->at = 0;
+    s->fd = static_cast<int>(own); s->dir = fd; s->busy = 0; s->doomed = 0;
+    s->position = 0; s->used = 0; s->at = 0;
+    listings_lock(); s->next = g_listings; g_listings = s; listings_unlock();
     *iter = reinterpret_cast<kal_uintptr>(s);
     return kal_ok;
 }
 
-int kal_fs_list_next(kal_dir, kal_uintptr* iter,
+int kal_fs_list_next(kal_dir d, kal_uintptr* iter,
                      char* name_out, kal_uintptr name_cap,
                      kal_uintptr* name_len, int* kind) {
-    if (iter == nullptr || *iter == 0) return kal_err_invalid;
+    // A closed directory is a released handle (clause 6.7), and closing it
+    // released the iterator too, which fs.h states.
+    const int fd = okm::unpack(d.h);
+    if (fd < 0 || iter == nullptr || *iter == 0) return kal_err_invalid;
     auto* s = reinterpret_cast<listing*>(*iter);
+    if (!listing_take(s, fd)) return kal_err_invalid;
     for (;;) {
         if (s->at >= s->used) {
             const okm_long r = okm::sys(okm::nr_getdirentries64, s->fd,
@@ -608,8 +691,7 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter,
                                         reinterpret_cast<okm_long>(&s->position));
             if (okm::interrupted(r)) continue;
             if (okm::failed(r) || r == 0) {
-                okm::sys(okm::nr_close, s->fd);
-                kal_free(s, sizeof(listing), alignof(listing));
+                listing_give(s, true);
                 *iter = 0;
                 if (name_len) *name_len = 0;
                 return okm::failed(r) ? okm::translate(r) : kal_ok;
@@ -627,6 +709,7 @@ int kal_fs_list_next(kal_dir, kal_uintptr* iter,
         if (kind) *kind = e->type == okm::dt_dir ? kal_node_directory
                         : e->type == okm::dt_reg ? kal_node_file
                         : e->type == okm::dt_lnk ? kal_node_link : kal_node_other;
+        listing_give(s, false);
         return kal_ok;
     }
 }
