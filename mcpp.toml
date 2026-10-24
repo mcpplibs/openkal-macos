@@ -70,20 +70,30 @@ flags = [
                                  "-fno-stack-protector", "-fno-builtin"] },
 ]
 
-# THREE NAMES THE SYSTEM LIBRARY EXPORTS AND ITS DEVELOPMENT STUB DOES NOT LIST.
+# THE PREPARATIONS FOR A DUPLICATE ARE LEFT FOR THE LOADER TO FIND.
 #
-# kal_space_start calls the preparations this system's `fork' performs around
-# the duplication primitive (src/space.cpp, mcpplibs/openkal-musl#55). The
-# library exports them --- `fork' lives in one of its parts and calls them in
-# another --- and the stub a native link reads omits them, because they are not
-# part of the interface the system documents. `-U' states that a name may be
-# left for the loader to find among the images it has loaded, which is where
-# it is. A link made elsewhere reads port/libSystem.tbd, which lists them, and
-# is unaffected. The flags reach every program above this package: mcpp
-# forwards a dependency's `ldflags' to its consumer's link.
-ldflags = ["-Wl,-U,__libSystem_atfork_prepare",
-           "-Wl,-U,__libSystem_atfork_parent",
-           "-Wl,-U,__libSystem_atfork_child"]
+# kal_space_start calls the parts of the system library that this system's
+# `fork' calls around the duplication primitive (src/space.cpp,
+# mcpplibs/openkal-musl#55). They are exported, and they are not part of the
+# interface the system documents, so a development stub need not list them.
+# `-U' states that a name may be left for the loader to find among the images
+# it has loaded, which is where it is; a name the stub does list is bound as
+# usual. A link made elsewhere reads port/libSystem.tbd, which lists them. The
+# flags reach every program above this package: mcpp forwards a dependency's
+# `ldflags' to its consumer's link.
+ldflags = ["-Wl,-U,__dyld_atfork_parent",
+           "-Wl,-U,__dyld_atfork_prepare",
+           "-Wl,-U,__dyld_fork_child",
+           "-Wl,-U,__libc_fork_child",
+           "-Wl,-U,__libc_fork_parent",
+           "-Wl,-U,__libc_fork_prepare",
+           "-Wl,-U,__mach_fork_child",
+           "-Wl,-U,__malloc_fork_child",
+           "-Wl,-U,__malloc_fork_parent",
+           "-Wl,-U,__malloc_fork_prepare",
+           "-Wl,-U,__pthread_atfork_child",
+           "-Wl,-U,__pthread_atfork_parent",
+           "-Wl,-U,__pthread_atfork_prepare"]
 
 [features]
 default = []

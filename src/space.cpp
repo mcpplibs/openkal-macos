@@ -22,21 +22,59 @@ extern "C" {
 // THE SYSTEM LIBRARY'S OWN PREPARATION FOR A DUPLICATE, WITHOUT WHICH THE
 // DUPLICATE CANNOT START A THREAD.
 //
-// This system's `fork' is not only the primitive: around it the system library
-// takes its own locks, and in the duplicate it makes the library's state true
-// of the new process --- among the rest, the name of the task, which a
-// duplicate receives anew and through which the thread library allocates every
-// stack. The primitive alone left the duplicate holding the original's state,
-// and the first thread it asked for failed: measured, `pthread_create' returned
-// EAGAIN in a duplicate made here and 0 in the original (mcpplibs/openkal-musl#55).
+// This system's `fork' is not only the primitive. Around it each part of the
+// system library takes its locks, and in the copy each makes its state true of
+// the new process --- among the rest the name of the task, through which the
+// thread library allocates every stack, and the thread library's own record of
+// which threads exist. The primitive alone left the copy holding the original's
+// state, and the first thread it asked for failed (mcpplibs/openkal-musl#55).
 //
-// The three are the ones `fork' itself calls, under names no C library in this
-// ecosystem defines, so they are reachable beneath one as above one. They are
-// called in the order `fork' calls them: before the primitive, and then in each
-// image the one that belongs to it.
-void _libSystem_atfork_prepare(void);
-void _libSystem_atfork_parent(void);
-void _libSystem_atfork_child(void);
+// MEASURED on macOS 14.8.9, in a program that duplicated itself with the
+// primitive and asked the copy for a thread:
+//
+//     nothing                                  EAGAIN
+//     the two child preparations alone         the copy was killed
+//     and the thread library's locks around    0
+//     the whole set below, five times twenty   0
+//
+// The library's own `fork' calls these from a routine it does not export, so
+// the parts are called directly, in its order: locks before the primitive from
+// the outermost part inward, released in the original in the reverse order,
+// and the state renewed in the copy. Each is exported under a name no C library
+// in this ecosystem defines, so it is reachable beneath one as above one. The
+// handlers a program registers with `pthread_atfork' are not run: a copy made
+// here is not a `fork' the program asked for.
+void _dyld_atfork_prepare(void);
+void _dyld_atfork_parent(void);
+void _dyld_fork_child(void);
+void _malloc_fork_prepare(void);
+void _malloc_fork_parent(void);
+void _malloc_fork_child(void);
+void _libc_fork_prepare(void);
+void _libc_fork_parent(void);
+void _libc_fork_child(void);
+void _pthread_atfork_prepare(void);
+void _pthread_atfork_parent(void);
+void _pthread_atfork_child(void);
+void _mach_fork_child(void);
+
+}  // extern "C"
+
+namespace {
+
+void prepare() {
+    _dyld_atfork_prepare(); _malloc_fork_prepare(); _libc_fork_prepare(); _pthread_atfork_prepare();
+}
+void in_the_original() {
+    _pthread_atfork_parent(); _libc_fork_parent(); _malloc_fork_parent(); _dyld_atfork_parent();
+}
+void in_the_copy() {
+    _mach_fork_child(); _dyld_fork_child(); _pthread_atfork_child(); _malloc_fork_child(); _libc_fork_child();
+}
+
+}  // namespace
+
+extern "C" {
 
 int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
                     kal_process* out) {
@@ -50,12 +88,12 @@ int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
     (void)stack_top;
 
     bool is_duplicate = false;
-    _libSystem_atfork_prepare();
+    prepare();
     const okm_long child = okm::duplicate(is_duplicate);
-    if (okm::failed(child)) { _libSystem_atfork_parent(); return okm::translate(child); }
+    if (okm::failed(child)) { in_the_original(); return okm::translate(child); }
 
     if (is_duplicate) {
-        _libSystem_atfork_child();
+        in_the_copy();
         entry(arg);
         // THE ENTRY IS NOT REQUIRED TO RETURN, AND IF IT DOES THE CONTEXT ENDS.
         //
@@ -67,7 +105,7 @@ int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,
         for (;;) okm::sys(okm::nr_exit, 0);
     }
 
-    _libSystem_atfork_parent();
+    in_the_original();
     *out = kal_process{ static_cast<kal_uintptr>(child) };
     return kal_ok;
 }
