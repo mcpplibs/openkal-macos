@@ -28,10 +28,13 @@ targets:         [ arm64-macos, x86_64-macos ]
 install-name:    '/usr/lib/libSystem.B.dylib'
 current-version: 1351.0.0
 #
-# FIVE NAMES ARE CALLED AND ONE IS NOT.
+# EIGHTEEN NAMES ARE CALLED AND ONE IS NOT.
 #
-# The first four are names this implementation CALLS, and the enumeration above
-# found them. The three that 0.13.0 added answer the stack of the calling
+# The first eighteen are names this implementation CALLS. The thirteen that
+# 0.14.1 added are the preparations this system's `fork' performs around the
+# primitive, part by part, which a duplicate made by kal_space_start needs
+# before it can start a thread (src/space.cpp, mcpplibs/openkal-musl#55).
+# The three that 0.13.0 added answer the stack of the calling
 # thread (openkal 0.15, clause 11 entry 21), and they follow the same rule as
 # the two before them: this system's library defines them and no C library in
 # this ecosystem does, which is what makes them reachable from an
@@ -54,7 +57,12 @@ current-version: 1351.0.0
 # evidence about a format.
 exports:
   - targets:     [ arm64-macos, x86_64-macos ]
-    symbols:     [ _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
+    symbols:     [ __dyld_atfork_parent, __dyld_atfork_prepare, __dyld_fork_child,
+                   __libc_fork_child, __libc_fork_parent, __libc_fork_prepare,
+                   __mach_fork_child, __malloc_fork_child, __malloc_fork_parent,
+                   __malloc_fork_prepare, __pthread_atfork_child, __pthread_atfork_parent,
+                   __pthread_atfork_prepare,
+                   _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
                    _pthread_get_stackaddr_np, _pthread_get_stacksize_np,
                    __pthread_self, dyld_stub_binder ]
 ...

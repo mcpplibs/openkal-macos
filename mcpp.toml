@@ -1,7 +1,7 @@
 [package]
 namespace   = "mcpplibs"
 name        = "openkal-macos"
-version     = "0.14.0"
+version     = "0.14.1"
 description = "An implementation of openkal for macOS, written on the kernel's own calls. Its purpose is as much to test the specification as to be used."
 license     = "Apache-2.0"
 
@@ -69,6 +69,31 @@ flags = [
   { glob = "src/**", cxxflags = ["-fno-exceptions", "-fno-rtti",
                                  "-fno-stack-protector", "-fno-builtin"] },
 ]
+
+# THE PREPARATIONS FOR A DUPLICATE ARE LEFT FOR THE LOADER TO FIND.
+#
+# kal_space_start calls the parts of the system library that this system's
+# `fork' calls around the duplication primitive (src/space.cpp,
+# mcpplibs/openkal-musl#55). They are exported, and they are not part of the
+# interface the system documents, so a development stub need not list them.
+# `-U' states that a name may be left for the loader to find among the images
+# it has loaded, which is where it is; a name the stub does list is bound as
+# usual. A link made elsewhere reads port/libSystem.tbd, which lists them. The
+# flags reach every program above this package: mcpp forwards a dependency's
+# `ldflags' to its consumer's link.
+ldflags = ["-Wl,-U,__dyld_atfork_parent",
+           "-Wl,-U,__dyld_atfork_prepare",
+           "-Wl,-U,__dyld_fork_child",
+           "-Wl,-U,__libc_fork_child",
+           "-Wl,-U,__libc_fork_parent",
+           "-Wl,-U,__libc_fork_prepare",
+           "-Wl,-U,__mach_fork_child",
+           "-Wl,-U,__malloc_fork_child",
+           "-Wl,-U,__malloc_fork_parent",
+           "-Wl,-U,__malloc_fork_prepare",
+           "-Wl,-U,__pthread_atfork_child",
+           "-Wl,-U,__pthread_atfork_parent",
+           "-Wl,-U,__pthread_atfork_prepare"]
 
 [features]
 default = []
