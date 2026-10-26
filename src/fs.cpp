@@ -146,6 +146,12 @@ kal_uintptr volume_props(int fd) {
     const kal_uintptr conservative =
         KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME
         | KAL_FS_PROP_LOCKS | KAL_FS_PROP_CAPACITY;
+    // A NAME HELD OPEN IS REMOVED AT ONCE (0.17, clause 7.14) on the formats
+    // whose names this kernel keeps: `unlink' drops the entry and the file
+    // lives on until its last descriptor closes. A network volume's client
+    // renames a held file to a hidden name instead, so the directory that held
+    // it is not empty until the close, and the position is not claimed there.
+    const kal_uintptr local = conservative | KAL_FS_PROP_REMOVE_OPEN;
     if (fd < 0) return 0;
 
     okm::kstatfs64 sf{};
@@ -166,7 +172,7 @@ kal_uintptr volume_props(int fd) {
     // Both implement `renameatx_np' with RENAME_EXCL (0.17), and both store a
     // socket bound to a name.
     if (named("apfs") || named("hfs"))
-        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS
+        return local | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS
              | KAL_FS_PROP_EXECUTABLE
              | KAL_FS_PROP_RENAME_NO_REPLACE | KAL_FS_PROP_LOCAL_ENDPOINT;
 
@@ -183,7 +189,7 @@ kal_uintptr volume_props(int fd) {
     // The FAT family stores neither a case distinction nor a node that names
     // another, nor a mode. `symlinkat' on such a volume reports a refusal, and
     // this is where a caller learns it before it tries.
-    if (named("msdos") || named("exfat")) return conservative;
+    if (named("msdos") || named("exfat")) return local;
 
     return conservative;
 }
