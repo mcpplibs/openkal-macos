@@ -3,6 +3,8 @@
 #include <openkal/process.h>
 #include <openkal/memory.h>
 
+namespace okm { extern bool g_pipe_ignored_here; }
+
 // A program image that has been started.
 //
 // This system has no operation that starts a program relative to a directory,
@@ -326,6 +328,149 @@ extern "C" {
 // ⇒ 0.11 gives the caller a second directory, and both implementations now enter
 // the one the caller named. The divergence is gone because the thing that caused
 // it --- a property nobody had declared --- is declared.
+}  // extern "C" (reopened below)
+
+// --- the handles of this interface (0.17) ------------------------------------
+//
+// A started program's handle is its identifier. Since 0.17 two more kinds are
+// told apart by the top byte: this program itself, and a program found by its
+// identifier. This kernel has no descriptor for a program, so the second
+// carries, above the identifier, twenty-four bits of the moment the program
+// started --- what tells the program found apart from a later one given the
+// same number (process.h: "records started_ns at the open").
+namespace {
+constexpr unsigned kind_child = 0, kind_self = 1, kind_opened = 2;
+inline unsigned handle_kind(kal_process h) { return static_cast<unsigned>(h.h >> 56); }
+inline okm_long handle_pid(kal_process h) { return static_cast<okm_long>(h.h & 0xffffffffu); }
+
+// `proc_bsdinfo', as `proc_info' (PROC_PIDTBSDINFO) writes it.
+struct bsdinfo {
+    okm_u32 flags, status, xstatus, pid, ppid, uid, gid, ruid, rgid, svuid, svgid, rfu;
+    char comm[16]; char name[32];
+    okm_u32 nfiles, pgid, pjobc, tdev, tpgid; int nice;
+    okm_u64 start_sec, start_usec;
+};
+static_assert(sizeof(bsdinfo) == 136, "proc_bsdinfo");
+
+bool bsd(okm_long pid, bsdinfo& out) {
+    const okm_long r = okm::sys(okm::nr_proc_info, 2 /* PROC_INFO_CALL_PIDINFO */, pid,
+                                3 /* PROC_PIDTBSDINFO */, 0, reinterpret_cast<okm_long>(&out),
+                                sizeof out);
+    return !okm::failed(r) && r == static_cast<okm_long>(sizeof out);
+}
+
+okm_u32 start_mark(const bsdinfo& b) {
+    const okm_u64 us = b.start_sec * 1000000ull + b.start_usec;
+    return static_cast<okm_u32>((us ^ (us >> 24) ^ (us >> 48)) & 0xffffffu);
+}
+
+// The kernel reports processor time in its own ticks, and this is the ratio to
+// nanoseconds (`mach_timebase_info', a Mach trap): 125/3 on the processors this
+// system now runs on, 1/1 on the earlier ones.
+void timebase(okm_u32& numer, okm_u32& denom) {
+    struct { okm_u32 numer, denom; } tb{1, 1};
+#if defined(__aarch64__)
+    register okm_long x0 __asm__("x0") = reinterpret_cast<okm_long>(&tb);
+    register okm_long x16 __asm__("x16") = -89;
+    __asm__ __volatile__("svc #0x80" : "+r"(x0) : "r"(x16) : "memory", "cc", "x1");
+#else
+    okm_long r;
+    __asm__ __volatile__("syscall" : "=a"(r) : "a"(0x1000000 + 89), "D"(&tb) : "rcx", "r11", "memory");
+#endif
+    numer = tb.numer ? tb.numer : 1; denom = tb.denom ? tb.denom : 1;
+}
+
+bool cpu_ns(okm_long pid, okm_u64& out) {
+    alignas(8) unsigned char ri[400] = {};       // rusage_info_v0 and some
+    const okm_long r = okm::sys(okm::nr_proc_info, 9 /* PROC_INFO_CALL_PIDRUSAGE */, pid,
+                                0 /* RUSAGE_INFO_V0 */, 0, reinterpret_cast<okm_long>(ri), 0);
+    if (okm::failed(r)) return false;
+    okm_u64 user = 0, sys = 0;
+    okm::copy(reinterpret_cast<char*>(&user), reinterpret_cast<const char*>(ri + 16), 8);
+    okm::copy(reinterpret_cast<char*>(&sys), reinterpret_cast<const char*>(ri + 24), 8);
+    okm_u32 n = 1, d = 1;
+    timebase(n, d);
+    out = (user + sys) / d * n + (user + sys) % d * n / d;
+    return true;
+}
+
+bool has_ended(kal_process h) {
+    if (handle_kind(h) == kind_self) return false;
+    bsdinfo b{};
+    if (handle_kind(h) == kind_opened) {
+        if (!bsd(handle_pid(h), b)) return true;
+        if (b.status == 5 /* SZOMB */) return true;
+        return start_mark(b) != static_cast<okm_u32>((h.h >> 32) & 0xffffffu);
+    }
+    alignas(8) unsigned char info[128] = {};
+    const okm_long r = okm::sys(okm::nr_waitid, 1 /* P_PID */, handle_pid(h),
+                                reinterpret_cast<okm_long>(info),
+                                0x4 | 0x1 | 0x20 /* WEXITED | WNOHANG | WNOWAIT */);
+    if (r == -10 /* ECHILD */) return true;
+    if (okm::failed(r)) return false;
+    int si_pid = 0;
+    okm::copy(reinterpret_cast<char*>(&si_pid), reinterpret_cast<const char*>(info + 8), sizeof si_pid);
+    return si_pid != 0;
+}
+
+// EVERY ENVIRONMENT ENTRY IS `NAME=value' (0.17, process.h).
+bool entries_well_formed(const char** envp, const kal_uintptr* lens, kal_uintptr n) {
+    for (kal_uintptr i = 0; i < n; ++i) {
+        if (envp[i] == nullptr) return false;
+        kal_uintptr eq = 0;
+        while (eq < lens[i] && envp[i][eq] != '=') ++eq;
+        if (eq == 0 || eq == lens[i]) return false;
+    }
+    return true;
+}
+}  // namespace
+
+extern "C" {
+
+int kal_process_self(kal_process* out) {
+    if (out == nullptr) return kal_err_invalid;
+    *out = kal_process{ (static_cast<kal_uintptr>(kind_self) << 56)
+                        | static_cast<kal_uintptr>(okm::sys(okm::nr_getpid)) };
+    return kal_ok;
+}
+
+int kal_process_open_id(kal_u64 id, kal_process* out) {
+    if (out == nullptr || id == 0) return kal_err_invalid;
+    if (id > 0x7fffffffu) return kal_err_not_found;
+    bsdinfo b{};
+    if (!bsd(static_cast<okm_long>(id), b)) {
+        const okm_long probe = okm::sys(okm::nr_kill, static_cast<okm_long>(id), 0);
+        return probe == -1 /* EPERM */ ? kal_err_permission : kal_err_not_found;
+    }
+    if (b.status == 5 /* SZOMB */) return kal_err_not_found;
+    *out = kal_process{ (static_cast<kal_uintptr>(kind_opened) << 56)
+                        | (static_cast<kal_uintptr>(start_mark(b)) << 32)
+                        | static_cast<kal_uintptr>(id) };
+    return kal_ok;
+}
+
+int kal_process_info(kal_process p, kal_u32 wanted, kal_program_info* out) {
+    if (out == nullptr || p.h == 0 || out->self_size < 8) return kal_err_invalid;
+    const kal_u32 self = out->self_size;
+    kal_program_info v{};
+    v.self_size = self;
+    const okm_long pid = handle_pid(p);
+    v.id = static_cast<kal_u64>(pid);
+    v.present = KAL_PINFO_ID | KAL_PINFO_ENDED;
+    const bool ended = has_ended(p);
+    v.ended = ended ? 1u : 0u;
+    bsdinfo b{};
+    if (!ended && (wanted & KAL_PINFO_STARTED) && bsd(pid, b)) {
+        v.started_ns = b.start_sec * 1000000000ull + b.start_usec * 1000ull;
+        v.present |= KAL_PINFO_STARTED;
+    }
+    okm_u64 c = 0;
+    if (!ended && (wanted & KAL_PINFO_CPU) && cpu_ns(pid, c)) { v.cpu_ns = c; v.present |= KAL_PINFO_CPU; }
+    const kal_u32 n = self < sizeof v ? self : static_cast<kal_u32>(sizeof v);
+    okm::copy(reinterpret_cast<char*>(out), reinterpret_cast<const char*>(&v), n);
+    return kal_ok;
+}
+
 int kal_process_spawn(const kal_spawn* how,
                       const char* path, kal_uintptr path_len,
                       const char** argv, const kal_uintptr* argv_lens, kal_uintptr argc,
@@ -347,6 +492,8 @@ int kal_process_spawn(const kal_spawn* how,
     // live context to notice. Composing it would move the defect from "refused"
     // to "works except when it matters".
     if (how->flags != 0) return kal_err_not_supported;
+    if (envc > 0 && (envp == nullptr || envp_lens == nullptr)) return kal_err_invalid;
+    if (!entries_well_formed(envp, envp_lens, envc)) return kal_err_invalid;
 
     okm::terminated p(path, path_len);
     if (!p.ok) return kal_err_invalid;
@@ -477,6 +624,13 @@ int kal_process_spawn(const kal_spawn* how,
 
         if (unit) okm::sys(nr_setpgid, 0, join);
 
+        // SIGPIPE AS THIS PROGRAM WAS STARTED WITH, not as this implementation
+        // set it for its own writes (env.cpp): an ignore would outlive `execve'.
+        if (okm::g_pipe_ignored_here) {
+            struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } standard{};
+            okm::sys(46 /* sigaction */, 13 /* SIGPIPE */, reinterpret_cast<okm_long>(&standard), 0);
+        }
+
         const okm_long why = okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
                                       reinterpret_cast<okm_long>(args.slots),
                                       reinterpret_cast<okm_long>(envs.slots));
@@ -549,6 +703,8 @@ void kal_process_channel_close(kal_stream s) {
 // One program, whatever unit it is in --- the unit has its own operation below,
 int kal_process_wait(kal_process h, int* status, int* terminated_by_environment) {
     if (h.h == 0) return kal_err_invalid;
+    if (handle_kind(h) == kind_self) return kal_err_invalid;
+    if (handle_kind(h) == kind_opened) return kal_err_not_supported;
     int st = 0;
     for (;;) {
         const okm_long r = okm::sys(okm::nr_wait4, static_cast<okm_long>(h.h),
@@ -574,6 +730,8 @@ int kal_process_wait(kal_process h, int* status, int* terminated_by_environment)
 // so this one's meaning never turns on how the program was started.
 int kal_process_terminate(kal_process h) {
     if (h.h == 0) return kal_err_invalid;
+    if (handle_kind(h) == kind_self) return kal_err_invalid;
+    if (handle_kind(h) == kind_opened) return kal_err_not_supported;
     const okm_long r = okm::sys(okm::nr_kill, static_cast<okm_long>(h.h), 15 /* SIGTERM */);
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
@@ -614,10 +772,18 @@ int     g_stop_armed = 0;
 constexpr okm_long nr_sigaction = 46;
 
 // What the kernel enters. Its arguments are (handler, infostyle, sig, siginfo,
-// ucontext) in x0..x4; it calls the handler with the last three and then asks
-// the kernel to restore the interrupted context.
+// ucontext, token) in x0..x5; it calls the handler with sig, siginfo and
+// ucontext and then asks the kernel to restore the interrupted context.
 //
-// x19 AND x20 ARE USED WITHOUT BEING SAVED, and that is correct here rather
+// THE TOKEN IS PASSED BACK (0.15). The kernel validates `sigreturn' against a
+// per-thread token it hands the trampoline in x5, and validation is switched
+// on for the process the first time anything installs a disposition through
+// the C library. Until then a trampoline that passed nothing worked --- which
+// is how this one shipped --- and afterwards `sigreturn' refused, and the
+// `brk' below ended the program with SIGTRAP: measured, a program that called
+// `signal(SIGINT, SIG_IGN)' before arming the word died on its first SIGTERM.
+//
+// x19, x20 AND x21 ARE USED WITHOUT BEING SAVED, and that is correct here rather
 // than sloppy: this function does not return to its caller. `sigreturn' restores
 // the whole of the interrupted context, callee-saved registers included, so the
 // values these two held belong to a frame the kernel is about to reinstate.
@@ -627,6 +793,7 @@ asm(".globl _okm_sigtramp\n"
     "_okm_sigtramp:\n"
     "  mov x19, x1\n"          // infostyle
     "  mov x20, x4\n"          // ucontext
+    "  mov x21, x5\n"          // token
     "  mov x8,  x0\n"          // handler
     "  mov x0,  x2\n"          // sig
     "  mov x1,  x3\n"          // siginfo
@@ -634,11 +801,17 @@ asm(".globl _okm_sigtramp\n"
     "  blr x8\n"
     "  mov x0,  x20\n"         // ucontext
     "  mov x1,  x19\n"         // infostyle
+    "  mov x2,  x21\n"         // token
     "  mov x16, #184\n"        // SYS_sigreturn
     "  svc #0x80\n"
     "  brk #1\n");             // sigreturn does not come back
 
-void stop_handler(int) {
+int g_stop_signal = 0;   // which request came first, for kal_process_end_as_requested
+
+void stop_handler(int signo) {
+    int none = 0;
+    __atomic_compare_exchange_n(&g_stop_signal, &none, signo, false,
+                                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
     __atomic_store_n(&g_stop_word, 1u, __ATOMIC_RELEASE);
     // Woken through the same operation `kal_task_wake' performs, issued as the
     // raw call because a handler may not enter code that takes a lock. Waking
@@ -664,6 +837,14 @@ struct macos_sigaction {
 // nothing' in its exact form: the program would ask whether its end had been
 // requested, be told no, and go on being told no after it had been.
 bool arm_one(int signo) {
+    // A REQUEST THE STARTER ARRANGED NOT TO DELIVER STAYS UNDELIVERED (0.17,
+    // the take-over rule): an inherited SIG_IGN is left as it is.
+    {
+        struct { void (*handler)(int); unsigned int mask; int flags; } old{};
+        if (!okm::failed(okm::sys(nr_sigaction, signo, 0, reinterpret_cast<okm_long>(&old)))
+            && old.handler == reinterpret_cast<void (*)(int)>(1))
+            return true;
+    }
     macos_sigaction act{};
     act.handler = &stop_handler;
     act.tramp   = reinterpret_cast<void (*)(void*, int, int, void*, void*)>(&okm_sigtramp);
@@ -704,6 +885,26 @@ const kal_u32* kal_process_stop_requested(void) {
 #endif
 }
 
+// ENDS AS THE REQUEST WOULD HAVE ENDED THE PROGRAM (0.17): the request's
+// default treatment restored, the request unblocked and sent again; a program
+// still here a moment later ends with the status a shell gives one so ended.
+int kal_process_end_as_requested(void) {
+    if (__atomic_load_n(&g_stop_word, __ATOMIC_ACQUIRE) == 0) return kal_err_invalid;
+#if defined(__aarch64__)
+    int signo = __atomic_load_n(&g_stop_signal, __ATOMIC_RELAXED);
+    if (signo == 0) signo = 15;
+    macos_sigaction act{};                         // SIG_DFL, no trampoline needed
+    okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&act), 0);
+    unsigned int set = 1u << (signo - 1);
+    okm::sys(okm::nr_sigprocmask, 2 /* SIG_UNBLOCK */, reinterpret_cast<okm_long>(&set), 0);
+    // A signal a program sends itself, unblocked, is delivered before the call
+    // returns; the exit below is reached only if it was not.
+    okm::sys(okm::nr_kill, okm::sys(okm::nr_getpid), signo);
+    okm::sys(okm::nr_exit, 128 + signo);
+#endif
+    for (;;) { }
+}
+
 // This program itself joins or forms a unit --- what `kal_spawn.job' cannot say,
 // because that places a program the caller STARTS and a copy wishing to lead a
 // unit must say so about ITSELF before it replaces itself.
@@ -736,7 +937,7 @@ void kal_process_job_close(kal_job) { }
 
 // Releasing the handle does not affect the program. A program that has not been
 // waited for continues, and this environment collects it when the caller exits.
-void kal_process_close(kal_process) { }
+void kal_process_close(kal_process) { }   // no kind of handle here holds a resource
 
 // Starting a program whose lifetime is bound to this one's. Version 0.10.
 //
@@ -751,6 +952,7 @@ kal_uintptr kal_process_props(void) { return
   | KAL_PROCESS_PROP_EXIT_STATUS
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
   | KAL_PROCESS_PROP_JOB
+  | KAL_PROCESS_PROP_OPEN_ID
 #if defined(__aarch64__)
   // AND IT AGREES WITH `kal_process_stop_requested', WHICH IS A REQUIREMENT
   // AND NOT A COURTESY: the header defines null there as the absence this

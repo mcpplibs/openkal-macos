@@ -146,6 +146,12 @@ kal_uintptr volume_props(int fd) {
     const kal_uintptr conservative =
         KAL_FS_PROP_MODIFIED_TIME | KAL_FS_PROP_ATOMIC_RENAME
         | KAL_FS_PROP_LOCKS | KAL_FS_PROP_CAPACITY;
+    // A NAME HELD OPEN IS REMOVED AT ONCE (0.17, clause 7.14) on the formats
+    // whose names this kernel keeps: `unlink' drops the entry and the file
+    // lives on until its last descriptor closes. A network volume's client
+    // renames a held file to a hidden name instead, so the directory that held
+    // it is not empty until the close, and the position is not claimed there.
+    const kal_uintptr local = conservative | KAL_FS_PROP_REMOVE_OPEN;
     if (fd < 0) return 0;
 
     okm::kstatfs64 sf{};
@@ -162,9 +168,13 @@ kal_uintptr volume_props(int fd) {
 
     // Nodes whose content is another name, on a format that stores a mode.
     // This is the ordinary volume of this system.
+    //
+    // Both implement `renameatx_np' with RENAME_EXCL (0.17), and both store a
+    // socket bound to a name.
     if (named("apfs") || named("hfs"))
-        return conservative | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS
-             | KAL_FS_PROP_EXECUTABLE;
+        return local | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS
+             | KAL_FS_PROP_EXECUTABLE
+             | KAL_FS_PROP_RENAME_NO_REPLACE | KAL_FS_PROP_LOCAL_ENDPOINT;
 
     // The automounter's own namespace: links, and no mode of its own.
     if (named("autofs"))
@@ -179,7 +189,7 @@ kal_uintptr volume_props(int fd) {
     // The FAT family stores neither a case distinction nor a node that names
     // another, nor a mode. `symlinkat' on such a volume reports a refusal, and
     // this is where a caller learns it before it tries.
-    if (named("msdos") || named("exfat")) return conservative;
+    if (named("msdos") || named("exfat")) return local;
 
     return conservative;
 }
@@ -659,6 +669,25 @@ int kal_fs_rename(kal_dir from, const char* a, kal_uintptr alen,
     return okm::failed(r) ? okm::translate(r) : kal_ok;
 }
 
+// A RENAME THAT DOES NOT REPLACE (0.17): `renameatx_np' with RENAME_EXCL, the
+// kernel's own test-and-rename. A format that does not implement the flag
+// answers ENOTSUP, which is a volume that cannot.
+int kal_fs_rename_flags(kal_dir from, const char* a, kal_uintptr alen,
+                        kal_dir to, const char* b, kal_uintptr blen, kal_uintptr flags) {
+    if ((flags & ~static_cast<kal_uintptr>(KAL_RENAME_NO_REPLACE)) != 0) return kal_err_invalid;
+    if (flags == 0) return kal_fs_rename(from, a, alen, to, b, blen);
+    const int f = okm::unpack(from.h), t2 = okm::unpack(to.h);
+    if (f < 0 || t2 < 0 || !okm::acceptable(a, alen) || !okm::acceptable(b, blen))
+        return kal_err_invalid;
+    if ((volume_props(t2) & KAL_FS_PROP_RENAME_NO_REPLACE) == 0) return kal_err_not_supported;
+    okm::terminated ta(a, alen), tb(b, blen);
+    if (!ta.ok || !tb.ok) return kal_err_invalid;
+    const okm_long r = okm::sys(okm::nr_renameatx_np, f, reinterpret_cast<okm_long>(ta.buf),
+                                t2, reinterpret_cast<okm_long>(tb.buf), 0x4 /* RENAME_EXCL */);
+    if (r == -45 /* ENOTSUP */) return kal_err_not_supported;
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
 int kal_fs_list_begin(kal_dir d, kal_uintptr* iter) {
     const int fd = okm::unpack(d.h);
     if (fd < 0 || iter == nullptr) return kal_err_invalid;
@@ -719,6 +748,15 @@ int kal_fs_list_next(kal_dir d, kal_uintptr* iter,
 // only in case succeeds on the Linux implementation and not on this one, and
 // the position reports it in advance, which no operation could.
 kal_uintptr kal_fs_props(kal_dir d) { return volume_props(okm::unpack(d.h)); }
+
+}  // extern "C" (reopened below)
+
+namespace okm {
+// For openkal.net's rendezvous at a name.
+kal_uintptr volume_props_of(int fd) { return volume_props(fd); }
+}  // namespace okm
+
+extern "C" {
 
 // Nodes whose content is another name.
 int kal_fs_link_create(kal_dir base, const char* name, kal_uintptr len,

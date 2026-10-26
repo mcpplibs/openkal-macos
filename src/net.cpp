@@ -46,7 +46,63 @@ int report_address(okm_long call, int fd, kal_endpoint* out) {
 
 }  // namespace
 
+namespace okm { kal_uintptr volume_props_of(int fd); }   // fs.cpp
+
+namespace {
+// A RENDEZVOUS AT A NAME (0.17). This kernel binds a local socket to a path and
+// has no call that binds beneath a descriptor; it does have a working
+// directory per THREAD (`__pthread_fchdir'), so the name is bound relative to
+// the directory the caller holds by entering it on this thread alone and
+// leaving it again --- no other context's names change meaning meanwhile. The
+// address holds 104 bytes.
+int at_name(kal_dir base, const char* name, kal_uintptr len, bool listen, kal_uintptr& out) {
+    const int dir = okm::unpack(base.h);
+    if (dir < 0 || len == 0 || len > 103 || !okm::acceptable(name, len)) return kal_err_invalid;
+    for (kal_uintptr i = 0; i < len; ++i) if (name[i] == '/') return kal_err_invalid;
+    if ((okm::volume_props_of(dir) & KAL_FS_PROP_LOCAL_ENDPOINT) == 0) return kal_err_not_supported;
+    unsigned char addr[106] = {};
+    addr[0] = static_cast<unsigned char>(2 + len + 1);  // sun_len
+    addr[1] = 1;                                         // AF_UNIX
+    for (kal_uintptr i = 0; i < len; ++i) addr[2 + i] = static_cast<unsigned char>(name[i]);
+    const okm_long fd = okm::sys(okm::nr_socket, 1 /* AF_UNIX */, okm::sock_stream, 0);
+    if (okm::failed(fd)) return okm::translate(fd);
+    close_on_exec(fd);
+    if (const okm_long r = okm::sys(okm::nr_pthread_fchdir, dir); okm::failed(r)) {
+        okm::sys(okm::nr_close, fd);
+        return okm::translate(r);
+    }
+    okm_long r = 0;
+    if (listen) {
+        r = okm::sys(okm::nr_bind, fd, reinterpret_cast<okm_long>(addr), addr[0]);
+    } else {
+        do r = okm::sys(okm::nr_connect, fd, reinterpret_cast<okm_long>(addr), addr[0]);
+        while (okm::interrupted(r));
+    }
+    okm::sys(okm::nr_pthread_fchdir, -1);                // back to the process's directory
+    if (!okm::failed(r) && listen) r = okm::sys(okm::nr_listen, fd, 128);
+    if (okm::failed(r)) {
+        okm::sys(okm::nr_close, fd);
+        if (listen && r == -48 /* EADDRINUSE */) return kal_err_exists;
+        if (!listen && (r == -2 /* ENOENT */ || r == -61 /* ECONNREFUSED */)) return kal_err_not_found;
+        return okm::translate(r);
+    }
+    out = okm::pack(static_cast<int>(fd));
+    if (out == 0) { okm::sys(okm::nr_close, fd); return kal_err_no_memory; }
+    return kal_ok;
+}
+}  // namespace
+
 extern "C" {
+
+int kal_net_listen_at(kal_dir base, const char* name, kal_uintptr len, kal_net_listener* out) {
+    if (out == nullptr) return kal_err_invalid;
+    return at_name(base, name, len, true, out->h);
+}
+
+int kal_net_connect_at(kal_dir base, const char* name, kal_uintptr len, kal_net_conn* out) {
+    if (out == nullptr) return kal_err_invalid;
+    return at_name(base, name, len, false, out->h);
+}
 
 int kal_net_connect(const kal_endpoint* to, kal_net_conn* out) {
     if (to == nullptr || out == nullptr) return kal_err_invalid;

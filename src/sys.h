@@ -194,6 +194,10 @@ enum : okm_long {
     nr_getrlimit = 194,
     // openkal 0.13: whether a node may be started
     nr_fchmodat = 467,
+    // openkal 0.17: a rename that does not replace, a program's information,
+    // how one ended, the request reproduced, and a thread's own directory.
+    nr_renameatx_np = 488, nr_proc_info = 336, nr_waitid = 173,
+    nr_sigprocmask = 48, nr_pthread_fchdir = 349,
     nr_ulock_wait = 515, nr_ulock_wake = 516,
 
     // The socket calls, and the one that reports readiness.
