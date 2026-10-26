@@ -75,6 +75,8 @@ kal_uintptr mode_of(const oktermios& t) {
     if ((t.lflag & (t_isig | t_iexten)) == 0 &&
         (t.iflag & t_ixon) == 0)   m |= KAL_TERM_PASS_CONTROL;
     if ((t.iflag & kAlters) == 0)  m |= KAL_TERM_PASS_INPUT;
+    // This system's terminals obey ECMA-48 whatever is asked (0.17).
+    m |= KAL_TERM_SEQUENCES;
     return m;
 }
 

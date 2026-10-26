@@ -41,14 +41,27 @@ namespace {
 // mistake that shows up as a program dying in a way nobody can trace --- which is
 // the defect this note is about, arrived at from the other side.
 //
-// ⇒ It is left until it can be MEASURED on this system. This repository already
-// refuses to claim a facility it has not exercised, and a signal disposition
-// installed by guesswork is exactly that. The consequence meanwhile is stated:
-// a program above this implementation that writes to a stream whose far end has
-// gone is ended by SIGPIPE rather than told, and no layer between it and here
-// can name what happened.
+// ⇒ MEASURED SINCE (0.15): the stop word installs a handler through this
+// kernel's `sigaction' with this implementation's own trampoline, and the
+// conformance suite raises the signal and returns from it. Ignoring needs no
+// trampoline at all --- the kernel never enters one for an ignored signal ---
+// so the shape is the measured one and the trampoline field is left empty.
+//
+// ONLY WHERE NOTHING ELSE HAS CHOSEN. A program whose own runtime installed a
+// handler for SIGPIPE keeps it; a disposition still at its default is the one
+// that ends the program without telling it, and that is the one replaced.
+void ignore_sigpipe() {
+    struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } act{};
+    struct { void (*handler)(int); unsigned int mask; int flags; } old{};
+    if (okm::failed(okm::sys(46 /* sigaction */, 13 /* SIGPIPE */, 0, reinterpret_cast<okm_long>(&old))))
+        return;
+    if (old.handler != nullptr) return;                 // not SIG_DFL
+    act.handler = reinterpret_cast<void (*)(int)>(1);   // SIG_IGN
+    okm::sys(46 /* sigaction */, 13, reinterpret_cast<okm_long>(&act), 0);
+}
 [[gnu::constructor(101)]] void capture(int argc, char** argv, char** envp) {
     if (okm::g_argv == nullptr) okm::record(argc, argv, envp);
+    ignore_sigpipe();
 }
 }  // namespace
 
@@ -106,6 +119,37 @@ kal_intptr kal_env_var_at(kal_uintptr index, char* out, kal_uintptr cap) {
         return give(entry, i, out, cap);
     }
     return -kal_err_not_found;
+}
+
+// THE IMAGE THE KERNEL STARTED (0.17): what `proc_pidpath' answers, the
+// kernel's record of the file it mapped (`proc_info', PROC_PIDPATHINFO);
+// where that is refused, `executable_path=' from the vector this kernel passes
+// after the environment, which is the name the kernel was given.
+kal_intptr kal_env_image(char* out, kal_uintptr cap) {
+    char buf[4096];
+    const okm_long n = okm::sys(okm::nr_proc_info, 2 /* PROC_INFO_CALL_PIDINFO */,
+                                okm::sys(okm::nr_getpid), 11 /* PROC_PIDPATHINFO */, 0,
+                                reinterpret_cast<okm_long>(buf), sizeof buf);
+    if (!okm::failed(n) && n > 0) {
+        kal_uintptr len = 0; while (len < sizeof buf && buf[len] != '\0') ++len;
+        if (len > 0) return give(buf, len, out, cap);
+    }
+    if (okm::g_envp != nullptr) {
+        char** a = okm::g_envp;
+        while (*a) ++a;
+        for (++a; *a; ++a) {
+            const char key[] = "executable_path=";
+            kal_uintptr i = 0;
+            while (key[i] != '\0' && (*a)[i] == key[i]) ++i;
+            if (key[i] == '\0') return give(*a + i, okm::length(*a + i), out, cap);
+        }
+    }
+    return -kal_err_not_found;
+}
+
+// For conventions only, as the declaration restricts it.
+kal_intptr kal_env_system(char* out, kal_uintptr cap) {
+    return give("macos", 5, out, cap);
 }
 
 }

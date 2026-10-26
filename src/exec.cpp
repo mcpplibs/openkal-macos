@@ -169,6 +169,22 @@ int kal_exec_publish(void* p, kal_uintptr size) {
     return kal_ok;
 }
 
+// PART OF A REGION (0.17): a run of whole pages made executable, the rest left
+// writable. A part that is not whole pages is refused rather than rounded.
+int kal_exec_publish_part(void* region, kal_uintptr offset, kal_uintptr size) {
+    const okm_uptr g = granularity();
+    if (region == nullptr || size == 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
+        || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0)
+        return kal_err_invalid;
+    const okm_long r = okm::sys(okm::nr_mprotect,
+                                reinterpret_cast<okm_long>(static_cast<char*>(region) + offset),
+                                static_cast<okm_long>(size), okm::prot_read | okm::prot_exec);
+    return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+// The page this kernel protects in, which is also what it reserves in.
+kal_uintptr kal_exec_granularity(void) { return granularity(); }
+
 void kal_exec_free(void* p, kal_uintptr size) {
     if (p == nullptr || size == 0) return;
     const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());

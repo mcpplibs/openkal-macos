@@ -106,6 +106,10 @@ inline int from_kernel(const ksockaddr_storage& in, kal_endpoint& out) {
         return kal_ok;
     }
 
+    // A connection made at a name (0.17) has no address and port to state; the
+    // kernel reports the local family, or an unnamed one for an accepted end.
+    if (family == 1 /* AF_UNIX */ || family == 0) return kal_err_not_supported;
+
     return kal_err_invalid;
 }
 
