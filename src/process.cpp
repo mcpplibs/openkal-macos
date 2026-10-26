@@ -763,10 +763,18 @@ int     g_stop_armed = 0;
 constexpr okm_long nr_sigaction = 46;
 
 // What the kernel enters. Its arguments are (handler, infostyle, sig, siginfo,
-// ucontext) in x0..x4; it calls the handler with the last three and then asks
-// the kernel to restore the interrupted context.
+// ucontext, token) in x0..x5; it calls the handler with sig, siginfo and
+// ucontext and then asks the kernel to restore the interrupted context.
 //
-// x19 AND x20 ARE USED WITHOUT BEING SAVED, and that is correct here rather
+// THE TOKEN IS PASSED BACK (0.15). The kernel validates `sigreturn' against a
+// per-thread token it hands the trampoline in x5, and validation is switched
+// on for the process the first time anything installs a disposition through
+// the C library. Until then a trampoline that passed nothing worked --- which
+// is how this one shipped --- and afterwards `sigreturn' refused, and the
+// `brk' below ended the program with SIGTRAP: measured, a program that called
+// `signal(SIGINT, SIG_IGN)' before arming the word died on its first SIGTERM.
+//
+// x19, x20 AND x21 ARE USED WITHOUT BEING SAVED, and that is correct here rather
 // than sloppy: this function does not return to its caller. `sigreturn' restores
 // the whole of the interrupted context, callee-saved registers included, so the
 // values these two held belong to a frame the kernel is about to reinstate.
@@ -776,6 +784,7 @@ asm(".globl _okm_sigtramp\n"
     "_okm_sigtramp:\n"
     "  mov x19, x1\n"          // infostyle
     "  mov x20, x4\n"          // ucontext
+    "  mov x21, x5\n"          // token
     "  mov x8,  x0\n"          // handler
     "  mov x0,  x2\n"          // sig
     "  mov x1,  x3\n"          // siginfo
@@ -783,6 +792,7 @@ asm(".globl _okm_sigtramp\n"
     "  blr x8\n"
     "  mov x0,  x20\n"         // ucontext
     "  mov x1,  x19\n"         // infostyle
+    "  mov x2,  x21\n"         // token
     "  mov x16, #184\n"        // SYS_sigreturn
     "  svc #0x80\n"
     "  brk #1\n");             // sigreturn does not come back
