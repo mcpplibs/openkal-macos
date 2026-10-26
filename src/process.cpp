@@ -3,6 +3,8 @@
 #include <openkal/process.h>
 #include <openkal/memory.h>
 
+namespace okm { extern bool g_pipe_ignored_here; }
+
 // A program image that has been started.
 //
 // This system has no operation that starts a program relative to a directory,
@@ -621,6 +623,13 @@ int kal_process_spawn(const kal_spawn* how,
         }
 
         if (unit) okm::sys(nr_setpgid, 0, join);
+
+        // SIGPIPE AS THIS PROGRAM WAS STARTED WITH, not as this implementation
+        // set it for its own writes (env.cpp): an ignore would outlive `execve'.
+        if (okm::g_pipe_ignored_here) {
+            struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } standard{};
+            okm::sys(46 /* sigaction */, 13 /* SIGPIPE */, reinterpret_cast<okm_long>(&standard), 0);
+        }
 
         const okm_long why = okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
                                       reinterpret_cast<okm_long>(args.slots),

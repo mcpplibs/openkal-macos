@@ -10,6 +10,9 @@ namespace okm {
 int    g_argc = 0;
 char** g_argv = nullptr;
 char** g_envp = nullptr;
+// Whether SIGPIPE was ignored HERE, at the default this program was started
+// with: a program it starts is given the default back (process.cpp).
+bool   g_pipe_ignored_here = false;
 
 void record(int argc, char** argv, char** envp) {
     g_argc = argc; g_argv = argv; g_envp = envp;
@@ -50,6 +53,11 @@ namespace {
 // ONLY WHERE NOTHING ELSE HAS CHOSEN. A program whose own runtime installed a
 // handler for SIGPIPE keeps it; a disposition still at its default is the one
 // that ends the program without telling it, and that is the one replaced.
+//
+// AND IT IS THIS PROGRAM'S, NOT PASSED ON. An ignored disposition survives
+// `execve', so a program started from here would begin with SIGPIPE ignored and
+// a shell it runs could not undo it. `kal_process_spawn' gives the default back
+// to the program it starts when the ignore was made here (process.cpp).
 void ignore_sigpipe() {
     struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } act{};
     struct { void (*handler)(int); unsigned int mask; int flags; } old{};
@@ -57,7 +65,8 @@ void ignore_sigpipe() {
         return;
     if (old.handler != nullptr) return;                 // not SIG_DFL
     act.handler = reinterpret_cast<void (*)(int)>(1);   // SIG_IGN
-    okm::sys(46 /* sigaction */, 13, reinterpret_cast<okm_long>(&act), 0);
+    if (!okm::failed(okm::sys(46 /* sigaction */, 13, reinterpret_cast<okm_long>(&act), 0)))
+        okm::g_pipe_ignored_here = true;
 }
 [[gnu::constructor(101)]] void capture(int argc, char** argv, char** envp) {
     if (okm::g_argv == nullptr) okm::record(argc, argv, envp);
