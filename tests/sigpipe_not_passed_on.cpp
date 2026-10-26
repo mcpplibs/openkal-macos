@@ -5,7 +5,10 @@
 // program that was itself started with it ignored.
 //
 // The disposition a program was started with is observed before openkal's own
-// initialiser runs: an initialiser of priority 100 runs before one of 101.
+// initialiser runs: an initialiser of priority 100 runs before one of 101. Both
+// starts are made here, with the disposition set explicitly: what this test
+// itself was started with is the harness's (a CI runner starts its steps with
+// SIGPIPE ignored).
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -57,23 +60,32 @@ int main(int argc, char** argv) {
     const kal_intptr n = kal_env_image(g_self, sizeof g_self - 1);
     if (n <= 0 || g_self[0] != '/') { std::printf("FAIL: the program's own image is named\n"); return 1; }
     g_self[n] = 0;
+    if (argc > 1 && std::strcmp(argv[1], "--started-default") == 0) {
+        struct sigaction now{};
+        ::sigaction(SIGPIPE, nullptr, &now);
+        if (now.sa_handler != SIG_IGN) return 2;   // this program's own writes are not ended by it
+        return started_child_reports() == 0 ? 0 : 1;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--started-ignoring") == 0)
         return started_child_reports() == 7 ? 0 : 1;
 
-    struct sigaction now{};
-    ::sigaction(SIGPIPE, nullptr, &now);
-    check(now.sa_handler == SIG_IGN, "this program's own writes are not ended by SIGPIPE");
-    check(started_child_reports() == 0, "a started program begins with SIGPIPE at its default");
-
-    const pid_t child = ::fork();
-    if (child == 0) {
-        ::signal(SIGPIPE, SIG_IGN);
-        ::execl(g_self, g_self, "--started-ignoring", nullptr);
-        ::_exit(93);
-    }
-    int st = 0;
-    ::waitpid(child, &st, 0);
-    check(WIFEXITED(st) && WEXITSTATUS(st) == 0,
+    // This program again, started with SIGPIPE as `disposition' says: 0 when
+    // the program it then starts through openkal reported what was expected.
+    auto started_with = [](void (*disposition)(int), const char* mode) {
+        const pid_t child = ::fork();
+        if (child == 0) {
+            ::signal(SIGPIPE, disposition);
+            ::execl(g_self, g_self, mode, nullptr);
+            ::_exit(93);
+        }
+        int st = 0;
+        ::waitpid(child, &st, 0);
+        return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+    };
+    const int d = started_with(SIG_DFL, "--started-default");
+    check(d != 2, "this program's own writes are not ended by SIGPIPE");
+    check(d == 0, "a program started with SIGPIPE at its default starts others with it at its default");
+    check(started_with(SIG_IGN, "--started-ignoring") == 0,
           "a program started with SIGPIPE ignored passes the ignore on, as it was given");
 
     if (failures == 0) std::printf("openkal-macos: SIGPIPE ignored here, not passed on\n");
