@@ -134,6 +134,13 @@ kal_intptr kal_env_var_at(kal_uintptr index, char* out, kal_uintptr cap) {
 // kernel's record of the file it mapped (`proc_info', PROC_PIDPATHINFO);
 // where that is refused, `executable_path=' from the vector this kernel passes
 // after the environment, which is the name the kernel was given.
+// A program built for its environment was loaded by nothing the interface
+// names (clause 12: only an image has a loader to name).
+kal_intptr kal_env_loader(char* out, kal_uintptr cap) {
+    (void)out; (void)cap;
+    return -kal_err_not_found;
+}
+
 kal_intptr kal_env_image(char* out, kal_uintptr cap) {
     char buf[4096];
     const okm_long n = okm::sys(okm::nr_proc_info, 2 /* PROC_INFO_CALL_PIDINFO */,
