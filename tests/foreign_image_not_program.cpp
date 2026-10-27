@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 import openkal.types;
 import openkal.fs;
