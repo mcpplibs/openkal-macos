@@ -865,9 +865,10 @@ const kal_u32* kal_process_stop_requested(void) {
     int state = __atomic_load_n(&g_stop_armed, __ATOMIC_ACQUIRE);
     if (state == 0) {
         // SIGTERM is the one `kal_process_terminate' sends here; SIGINT is what
-        // an interactive stream delivers. Both are requests to end, which is the
+        // an interactive stream delivers; SIGHUP is the terminal that started
+        // the program closing (0.15.1). All are requests to end, which is the
         // whole of what this word reports.
-        const bool ok = arm_one(15) && arm_one(2);
+        const bool ok = arm_one(15) && arm_one(2) && arm_one(1);
         state = ok ? 1 : -1;
         __atomic_store_n(&g_stop_armed, state, __ATOMIC_RELEASE);
     }
