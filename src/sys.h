@@ -270,6 +270,9 @@ enum : int {
     e_inval = 22, e_nfile = 23, e_mfile = 24, e_notty = 25, e_fbig = 27,
     e_nospc = 28, e_spipe = 29, e_rofs = 30, e_pipe = 32, e_range = 34,
     e_nametoolong = 63, e_nosys = 78, e_notempty = 66, e_loop = 62,
+    // A file this machine cannot start: built for another processor, or not
+    // an image this loader reads.
+    e_badarch = 86, e_badmacho = 88,
     // This system has two values for an operation the object does not support,
     // and they are different numbers: 45 is the one a call upon a resource of
     // the wrong kind returns, and 102 is the one a socket returns.
@@ -341,7 +344,7 @@ inline int translate(okm_long r) {
         case e_notempty:                                 return 11; // not empty
         case e_isdir:                                    return 12; // is directory
         case e_notdir:                                   return 13; // not directory
-        case e_noexec:                                   return 14; // not program
+        case e_noexec: case e_badarch: case e_badmacho:  return 14; // not program
         default:                                         return 3;  // io
     }
 }
