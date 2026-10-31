@@ -27,7 +27,7 @@ jobs:
           # exports, whether an entry point of one's own is accepted, whether the
           # suspension primitive behaves --- are properties of the system rather
           # than of the processor, and the x86_64 runner queues for half an hour.
-          - { os: macos-14, arch: arm64 }
+          - { os: macos-15, arch: arm64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
