@@ -47,7 +47,7 @@ jobs:
           # done: the `numbers' workflow measures that kernel's own table on
           # both architectures, and the step below compiles every source for the
           # other one with the system's compiler.
-          - { os: macos-14, toolchain: 'llvm@20.1.7' }
+          - { os: macos-15, toolchain: 'llvm@20.1.7' }
     steps:
       - uses: actions/checkout@v4
 
