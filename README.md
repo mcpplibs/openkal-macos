@@ -160,9 +160,9 @@ out of a mutex and a condition variable, had this backwards.
 is the call a C library above makes most often: openkal-musl finds `errno`,
 thread-specific data and an ok image's thread-local variables through it, 1.58
 million times in one `clangd --check`. Linux answers it from a per-thread cache;
-here it was a system call per answer until 0.17.1, which made clangd.okb 1.25 to
-1.9 times slower than the native clangd on the macOS arm64 runners and as fast
-on Linux. Since 0.17.1 it is the same kernel identifier, read from the record
+here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
+1.96 times slower than the native clangd on the macOS arm64 runners while the
+same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
 

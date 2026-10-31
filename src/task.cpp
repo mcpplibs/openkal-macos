@@ -263,10 +263,12 @@ void kal_task_yield(void) { okm::relax(); }
 // state through this (openkal-musl: `errno', thread-specific data, and every
 // thread-local variable of an ok image, which is emulated), so it is called far
 // more often than anything else here: 1.58 million times in one `clangd --check'
-// of a 4,000-declaration file. A system call per answer (`thread_selfid') cost
-// clangd.okb 0.3--0.9 s of such a run on the macOS arm64 runners, the whole of
-// its difference from the native clangd there, where Linux answers from a
-// per-thread cache. `pthread_threadid_np' answers the same number from the
+// of a 4,000-declaration file. It was a system call per answer
+// (`thread_selfid') where Linux answers from a per-thread cache, and on the
+// macOS arm64 runners clangd.okb parsed 1.25 to 1.96 times slower than the
+// native clangd while the same image parses as fast on Linux arm64. Forcing
+// the system call per answer on Linux x86_64 adds 134 ms to such a run (median
+// of seven). `pthread_threadid_np' answers the same number from the
 // record the library keeps for each thread, without entering the kernel; the
 // system call remains for a thread that library has not recorded.
 kal_uintptr kal_task_current(void) {
