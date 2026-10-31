@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.19.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.17.0"
+openkal-macos = "0.17.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -155,6 +155,16 @@ different name and with no shared ancestry with the one Linux offers. That two
 unrelated systems provide it is the evidence that it is the shape of the thing
 rather than the shape of one kernel — and version 0.2, which built the primitive
 out of a mutex and a condition variable, had this backwards.
+
+**A context's identity is read, not asked of the kernel.** `kal_task_current`
+is the call a C library above makes most often: openkal-musl finds `errno`,
+thread-specific data and an ok image's thread-local variables through it, 1.58
+million times in one `clangd --check`. Linux answers it from a per-thread cache;
+here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
+1.96 times slower than the native clangd on the macOS arm64 runners while the
+same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
+this system's library keeps for each thread (`pthread_threadid_np`, a name no C
+library in this ecosystem defines).
 
 ## The region a context stands on
 

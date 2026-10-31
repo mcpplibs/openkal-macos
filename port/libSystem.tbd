@@ -64,6 +64,6 @@ exports:
                    __pthread_atfork_prepare,
                    _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
                    _pthread_get_stackaddr_np, _pthread_get_stacksize_np,
-                   _pthread_set_qos_class_self_np,
+                   _pthread_set_qos_class_self_np, _pthread_threadid_np,
                    __pthread_self, dyld_stub_binder ]
 ...
