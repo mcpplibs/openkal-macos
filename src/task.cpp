@@ -63,6 +63,10 @@ int pthread_attr_setguardsize(void* attr, unsigned long size);
 // A thread's quality-of-service class (kal_task_set_priority): no C library in
 // this ecosystem defines it, in either arrangement.
 int pthread_set_qos_class_self_np(unsigned qos_class, int relative_priority);
+// The calling thread's identifier as this system's library recorded it in the
+// thread's own state (kal_task_current): a name no C library in this ecosystem
+// defines.
+int pthread_threadid_np(void* thread, unsigned long long* thread_id);
 
 // THE STACK OF THE CALLING THREAD, AND THE THREE NAMES FOLLOW THE RULE THE
 // COMMENT ABOVE STATES RATHER THAN A PREFERENCE: a name is reachable from here
@@ -254,7 +258,22 @@ int kal_task_join(kal_task h) {
 
 void kal_task_yield(void) { okm::relax(); }
 
-kal_uintptr kal_task_current(void) { return okm::current_context(); }
+// THE KERNEL'S IDENTIFIER, READ WHERE THIS SYSTEM'S LIBRARY KEEPS IT RATHER
+// THAN ASKED OF THE KERNEL AT EVERY CALL. A C library above finds its per-context
+// state through this (openkal-musl: `errno', thread-specific data, and every
+// thread-local variable of an ok image, which is emulated), so it is called far
+// more often than anything else here: 1.58 million times in one `clangd --check'
+// of a 4,000-declaration file. A system call per answer (`thread_selfid') cost
+// clangd.okb 0.3--0.9 s of such a run on the macOS arm64 runners, the whole of
+// its difference from the native clangd there, where Linux answers from a
+// per-thread cache. `pthread_threadid_np' answers the same number from the
+// record the library keeps for each thread, without entering the kernel; the
+// system call remains for a thread that library has not recorded.
+kal_uintptr kal_task_current(void) {
+    unsigned long long id = 0;
+    if (pthread_threadid_np(nullptr, &id) == 0 && id != 0) return static_cast<kal_uintptr>(id);
+    return okm::current_context();
+}
 
 // The stack the calling context runs on. Version 0.15.
 //
