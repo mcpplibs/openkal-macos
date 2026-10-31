@@ -60,6 +60,9 @@ int pthread_attr_destroy(void* attr);
 int pthread_attr_setstacksize(void* attr, unsigned long size);
 int pthread_attr_setguardsize(void* attr, unsigned long size);
 #endif
+// A thread's quality-of-service class (kal_task_set_priority): no C library in
+// this ecosystem defines it, in either arrangement.
+int pthread_set_qos_class_self_np(unsigned qos_class, int relative_priority);
 
 // THE STACK OF THE CALLING THREAD, AND THE THREE NAMES FOLLOW THE RULE THE
 // COMMENT ABOVE STATES RATHER THAN A PREFERENCE: a name is reachable from here
@@ -346,6 +349,46 @@ int kal_task_wake(const kal_u32* word, kal_uintptr count, kal_uintptr* woken) {
 // this implementation doing anything to earn it.
 kal_uintptr kal_task_props(void) { return
     KAL_TASK_PROP_PREEMPTIVE | KAL_TASK_PROP_PARALLEL
-  | KAL_TASK_PROP_WAIT_TIMEOUT | KAL_TASK_PROP_THREAD_LOCAL; }
+  | KAL_TASK_PROP_WAIT_TIMEOUT | KAL_TASK_PROP_THREAD_LOCAL
+  | KAL_TASK_PROP_PRIORITY; }
+
+// THE PHYSICAL CORES, which this system states as `hw.physicalcpu' beside the
+// processors `hw.ncpu' counts. That name has no fixed number, so the kernel is
+// asked for the number first (`sysctl.name2oid', {0, 3}). Zero is "cannot say".
+kal_uintptr kal_task_cores(void) {
+    static const char name[] = "hw.physicalcpu";
+    int lookup[2] = { 0, 3 };
+    int oid[8] = {};
+    okm_uptr oid_length = sizeof oid;
+    okm_long r = okm::sys(okm::nr_sysctl, reinterpret_cast<okm_long>(lookup), 2,
+                          reinterpret_cast<okm_long>(oid), reinterpret_cast<okm_long>(&oid_length),
+                          reinterpret_cast<okm_long>(name), static_cast<okm_long>(sizeof name - 1));
+    if (okm::failed(r) || oid_length < sizeof(int)) return 0;
+    int value = 0;
+    okm_uptr length = sizeof value;
+    r = okm::sys(okm::nr_sysctl, reinterpret_cast<okm_long>(oid), static_cast<okm_long>(oid_length / sizeof(int)),
+                 reinterpret_cast<okm_long>(&value), reinterpret_cast<okm_long>(&length), 0, 0);
+    if (okm::failed(r) || value <= 0) return 0;
+    const kal_uintptr cores = static_cast<kal_uintptr>(value);
+    const kal_uintptr processors = kal_task_parallelism();
+    return processors && cores > processors ? processors : cores;
+}
+
+// THE CALLING THREAD'S QUALITY-OF-SERVICE CLASS: default, utility, background
+// --- the three this system's scheduler and its energy policy act upon. A
+// thread may set its own class either way. `pthread_set_qos_class_self_np'
+// is a name no C library in this ecosystem defines, which is the rule stated
+// at the top of this file for a name of this system's thread library.
+int kal_task_set_priority(kal_uintptr priority) {
+    unsigned qos;
+    switch (priority) {
+        case KAL_TASK_PRIORITY_DEFAULT:    qos = 0x15; break;   // QOS_CLASS_DEFAULT
+        case KAL_TASK_PRIORITY_LOW:        qos = 0x11; break;   // QOS_CLASS_UTILITY
+        case KAL_TASK_PRIORITY_BACKGROUND: qos = 0x09; break;   // QOS_CLASS_BACKGROUND
+        default: return kal_err_invalid;
+    }
+    const int e = pthread_set_qos_class_self_np(qos, 0);
+    return e == 0 ? kal_ok : okm::translate(-static_cast<okm_long>(e));
+}
 
 }
