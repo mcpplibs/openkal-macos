@@ -194,6 +194,33 @@ kal_uintptr volume_props(int fd) {
     return conservative;
 }
 
+// THE PROPERTIES OF A VOLUME, ONCE PER VOLUME (0.18). An enquiry that wants
+// whether a file may be started asks its volume, and asked `fstatfs64' once per
+// enquiry, one beside every `stat'. A volume's format does not change under a
+// device number while it is mounted, so the answer is kept by the device the
+// kernel reports for the node; a slot a later device needs is taken over
+// (eight are kept).
+struct volume_answer { okm_u64 dev; kal_uintptr props; bool known; };
+volume_answer g_volumes[8];
+unsigned g_volume_next = 0;
+volatile int g_volume_lock = 0;
+
+kal_uintptr volume_props_on(okm_u64 dev, int fd) {
+    while (__atomic_exchange_n(&g_volume_lock, 1, __ATOMIC_ACQUIRE)) okm::relax();
+    for (auto const& v : g_volumes)
+        if (v.known && v.dev == dev) {
+            const kal_uintptr props = v.props;
+            __atomic_store_n(&g_volume_lock, 0, __ATOMIC_RELEASE);
+            return props;
+        }
+    __atomic_store_n(&g_volume_lock, 0, __ATOMIC_RELEASE);
+    const kal_uintptr props = volume_props(fd);
+    while (__atomic_exchange_n(&g_volume_lock, 1, __ATOMIC_ACQUIRE)) okm::relax();
+    g_volumes[g_volume_next++ % 8] = volume_answer{ dev, props, true };
+    __atomic_store_n(&g_volume_lock, 0, __ATOMIC_RELEASE);
+    return props;
+}
+
 // Writes no more of the structure than the caller says exists on its side, and
 // reports which fields it filled. Every field but `executable' is filled
 // unconditionally: one call answers all of them on this kernel, so selecting
@@ -203,8 +230,8 @@ kal_uintptr volume_props(int fd) {
 // well as of the node: a format that stores no mode has nothing honest to
 // report, and reporting the mount's own choice of bits would be answering for
 // the volume rather than the node. The volume is consulted only when the
-// caller wants the field, and only for a file --- kal_fs_props already answers
-// whether it is worth asking.
+// caller wants the field, and only for a file, and once per volume ---
+// kal_fs_props already answers whether it is worth asking.
 void fill_info(const okm::kstat64& st, kal_u32 wanted, kal_node_info* out,
               int volume_fd) {
     const kal_u32 self = out->self_size;
@@ -227,7 +254,7 @@ void fill_info(const okm::kstat64& st, kal_u32 wanted, kal_node_info* out,
         __builtin_offsetof(kal_node_info, executable) + sizeof v.executable);
     if ((wanted & KAL_INFO_EXECUTABLE) != 0 && self >= reaches
         && v.kind == kal_node_file
-        && (volume_props(volume_fd) & KAL_FS_PROP_EXECUTABLE) != 0) {
+        && (volume_props_on(st.dev, volume_fd) & KAL_FS_PROP_EXECUTABLE) != 0) {
         v.present    |= KAL_INFO_EXECUTABLE;
         v.executable  = (okm::stat_mode(st) & 0111u) != 0 ? 1 : 0;
     }

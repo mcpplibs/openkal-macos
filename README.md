@@ -178,6 +178,11 @@ anonymous mapping over it --- the kernel's advice for unneeded pages keeps their
 contents until it wants the memory, and the specification promises zero after
 `kal_region_decommit` --- and discarding is that advice, `madvise(MADV_FREE)`.
 
+**A volume is asked once.** Whether a file may be started is a property of its
+volume as well as of its node (`KAL_INFO_EXECUTABLE`); the volume's answer
+(`fstatfs64`) is kept by the device number the node reports, so a `stat` that
+wants the field makes one system call. Eight volumes are kept.
+
 **What a program and a unit use.** `KAL_PINFO_MEMORY` is the footprint the
 system's own tools report (`proc_pid_rusage`, `ri_phys_footprint` and
 `ri_lifetime_max_phys_footprint`). The kernel keeps an ended program's record
