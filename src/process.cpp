@@ -470,7 +470,11 @@ kal_u32 unit_use(okm_long unit, okm_u64& memory) {
     return count;
 }
 
-struct limited { okm_long unit; okm_u64 limit; int ended; };
+// A unit this program limited. `killed' names the programs the supervisor
+// ended for the limit: an ended program's group is not something this kernel
+// reports reliably once it has ended, so the programs are recorded as they are
+// ended.
+struct limited { okm_long unit; okm_u64 limit; int ended; int count; int killed[64]; };
 constexpr int kLimited = 64;
 limited g_limited[kLimited];
 volatile int g_limited_lock = 0;
@@ -492,11 +496,23 @@ void supervise(void*) {
             unlock_limited();
             if (r.unit == 0 || r.limit == 0 || r.ended) continue;
             any = true;
+            int pids[1024];
+            const okm_long n = group_members(r.unit, pids, 1024);
             okm_u64 memory = 0;
-            if (unit_use(r.unit, memory) == 0) continue;
+            for (okm_long k = 0; k < n; ++k) {
+                okm_u64 now = 0, peak = 0;
+                if (footprint(pids[k], now, peak)) memory += now;
+            }
+            if (n == 0) continue;
             if (memory > r.limit) {
+                // Recorded before they are ended, so that a wait that returns
+                // because of the end already finds why.
                 lock_limited();
-                if (g_limited[i].unit == r.unit) g_limited[i].ended = 1;
+                if (g_limited[i].unit == r.unit) {
+                    g_limited[i].ended = 1;
+                    for (okm_long k = 0; k < n && g_limited[i].count < 64; ++k)
+                        g_limited[i].killed[g_limited[i].count++] = pids[k];
+                }
                 unlock_limited();
                 okm::sys(okm::nr_kill, -r.unit, 9 /* SIGKILL */);
                 continue;
@@ -517,17 +533,15 @@ void supervise(void*) {
     }
 }
 
-// Whether a program ended on SIGKILL was ended by its unit's limit: the group
-// the kernel still records for it (an ended program's record holds it until it
-// is collected) is one the supervisor ended.
+// Whether a program ended on SIGKILL was ended by its unit's limit: one the
+// supervisor recorded as it ended it.
 bool ended_by_limit(okm_long pid) {
-    bsdinfo b{};
-    if (!bsd(pid, b) || b.pgid == 0) return false;
+    bool found = false;
     lock_limited();
-    const limited* r = row_of(static_cast<okm_long>(b.pgid));
-    const bool ended = r && r->ended;
+    for (const auto& r : g_limited)
+        for (int k = 0; r.unit && k < r.count && !found; ++k) found = r.killed[k] == pid;
     unlock_limited();
-    return ended;
+    return found;
 }
 }  // namespace
 
@@ -1107,7 +1121,7 @@ int kal_process_job_limit(kal_job j, kal_uintptr kind, kal_u64 value) {
     limited* r = row_of(unit);
     if (r == nullptr && value != 0) r = row_of(0);
     if (r == nullptr) { unlock_limited(); return value == 0 ? kal_ok : kal_err_no_memory; }
-    if (r->unit == 0) *r = limited{ unit, 0, 0 };
+    if (r->unit == 0) *r = limited{ unit, 0, 0, 0, {} };
     r->limit = value;
     unlock_limited();
     if (value != 0 && !__atomic_exchange_n(&g_supervising, 1, __ATOMIC_ACQ_REL)) {
