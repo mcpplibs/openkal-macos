@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.19.0"
+openkal = "0.20.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.17.1"
+openkal-macos = "0.18.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -18,7 +18,8 @@ different system is what turns the claim into an observation.
 
 ## Interfaces provided
 
-All fifteen. `tools/check-surface.sh --complete` in the specification package
+Every interface of `SURFACE.txt` except `openkal.prof` and `openkal.debug`, which are a
+loader's (clause 12.3). `tools/check-surface.sh --complete` in the specification package
 compares the exported names against `SURFACE.txt`.
 
 The five that openkal 0.8 added were declined by this implementation until now,
@@ -165,6 +166,32 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.18 adds (openkal 0.20)
+
+**Transfers at an offset** are the kernel's `pread` and `pwrite`.
+
+**Regions.** `openkal.region` over `mmap`: this kernel does not charge backing
+apart from reservation, so `KAL_REGION_PROP_OVERCOMMIT` is claimed and
+`kal_region_commit` makes no call. Returning a part's backing is a fresh fixed
+anonymous mapping over it --- the kernel's advice for unneeded pages keeps their
+contents until it wants the memory, and the specification promises zero after
+`kal_region_decommit` --- and discarding is that advice, `madvise(MADV_FREE)`.
+
+**What a program and a unit use.** `KAL_PINFO_MEMORY` is the footprint the
+system's own tools report (`proc_pid_rusage`, `ri_phys_footprint` and
+`ri_lifetime_max_phys_footprint`). The kernel keeps an ended program's record
+until it is collected, so `kal_process_wait` waits without collecting (`waitid`
+with `WNOWAIT`) and `kal_process_close` collects. A unit is a process group; the
+kernel lists its members (`proc_listpgrppids`) and a unit's use is their
+footprints summed (`KAL_PROCESS_PROP_JOB_USAGE`).
+
+**A limit on a unit is supervised** (`KAL_PROCESS_PROP_JOB_LIMIT_SUPERVISED`):
+a context started with the first limit observes the limited units every 500 ms
+below half the limit, 200 ms below four fifths and 100 ms above, and ends a unit
+over its limit with SIGKILL; `kal_process_wait` reports its programs with
+`KAL_TERMINATED_LIMIT`. This kernel has no ceiling upon a set of programs to
+which the limit could be left.
 
 ## The region a context stands on
 

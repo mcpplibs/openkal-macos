@@ -199,6 +199,8 @@ enum : okm_long {
     nr_renameatx_np = 488, nr_proc_info = 336, nr_waitid = 173,
     nr_sigprocmask = 48, nr_pthread_fchdir = 349,
     nr_ulock_wait = 515, nr_ulock_wake = 516,
+    // openkal 0.20: transfers at an offset.
+    nr_pread = 153, nr_pwrite = 154,
 
     // The socket calls, and the one that reports readiness.
     //
@@ -313,6 +315,7 @@ enum : okm_long {
     at_fdcwd = -2, at_removedir = 0x0080, at_symlink_nofollow = 0x0020,
     prot_read = 1, prot_write = 2, prot_exec = 4,
     map_shared = 1, map_private = 2, map_anon = 0x1000, ms_async = 1,
+    map_fixed = 0x10, madv_free = 5,
 };
 
 // The suspension primitive's operation word.

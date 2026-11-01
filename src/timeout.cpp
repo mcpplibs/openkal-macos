@@ -23,6 +23,8 @@
 // The granularity this interface reports is therefore a millisecond, which is
 // what the environment can distinguish rather than what would be convenient.
 
+namespace okm { int child_outcome(okm_long pid, bool block, int* status, int* terminated, bool& ended); }
+
 namespace {
 
 // A duration of zero denotes no bound, which is the convention kal_task_wait
@@ -155,24 +157,12 @@ int kal_timeout_wait_process(kal_process p, kal_u64 ns, int* status, int* termin
     okm_u64 waited = 0;
 
     for (;;) {
-        int st = 0;
-        const okm_long r = okm::sys(okm::nr_wait4, static_cast<okm_long>(p.h),
-                                    reinterpret_cast<okm_long>(&st),
-                                    okm::wnohang, 0);
-        if (okm::interrupted(r)) continue;
-        if (okm::failed(r)) return okm::translate(r);
-
-        if (r != 0) {
-            const int signalled = st & 0x7f;
-            if (signalled == 0) {
-                if (status) *status = (st >> 8) & 0xff;
-                if (terminated) *terminated = 0;
-            } else {
-                if (status) *status = signalled;
-                if (terminated) *terminated = 1;
-            }
-            return kal_ok;
-        }
+        // Read without collecting it (0.18): `kal_process_close' collects, as
+        // after `kal_process_wait'.
+        bool ended = false;
+        const int e = okm::child_outcome(static_cast<okm_long>(p.h & 0xffffffffu), false,
+                                         status, terminated, ended);
+        if (e != kal_ok || ended) return e;
 
         if (ns != 0 && waited >= ns) return kal_err_again;
 
