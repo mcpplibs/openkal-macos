@@ -53,7 +53,7 @@ jobs:
                    socket connect accept accept_nocancel bind listen shutdown \
                    getsockname getpeername setsockopt getsockopt \
                    sendto recvfrom sendmsg recvmsg socketpair \
-                   poll select pselect kevent; do
+                   poll select pselect kevent pread pwrite proc_info waitid; do
             printf '%-24s' "$n"
             grep -E "^#define[[:space:]]+SYS_${n}[[:space:]]" "$h" | head -1 || echo '(absent)'
           done
