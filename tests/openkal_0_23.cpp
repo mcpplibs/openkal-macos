@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <unistd.h>
+#include <mach-o/dyld.h>
 import openkal.types;
 import openkal.env;
 import openkal.fs;
@@ -32,6 +33,7 @@ kal_dir root() {
 
 char g_self[4096];
 char g_dir[] = "/tmp/okm-0.21-XXXXXX";
+int g_ended_by = 0;
 
 int start(const char* errand, const kal_preopen* grants, kal_uintptr n, kal_uintptr flags) {
     const kal_dir r = root();
@@ -45,6 +47,7 @@ int start(const char* errand, const kal_preopen* grants, kal_uintptr n, kal_uint
     int status = -1, terminated = 0;
     kal_process_wait(p, &status, &terminated);
     kal_process_close(p);
+    g_ended_by = terminated ? status : 0;
     return terminated ? -2 : status;
 }
 }  // namespace
@@ -121,8 +124,8 @@ int main(int argc, char** argv) {
         // this system reads to start (its libraries in /System and /usr/lib)
         // the rules allow, and /etc is not granted.
         static const char* const trees[] = { "private/tmp" };
-        kal_preopen grants[4];
-        static char names[4][1024];
+        kal_preopen grants[16];
+        static char names[16][1024];
         kal_uintptr count = 0;
         for (const char* t : trees) {
             kal_dir d{}, a{};
@@ -132,21 +135,33 @@ int main(int argc, char** argv) {
             grants[count] = kal_preopen{ a, names[count], std::strlen(names[count]) };
             ++count;
         }
-        {
-            char parent[4096];
-            std::strcpy(parent, g_self);
+        // The directory of every image this program has loaded outside this
+        // system's own libraries --- the program's, and a library a toolchain
+        // supplied --- since the started program loads the same ones.
+        for (uint32_t i = 0; i < _dyld_image_count() && count < 16; ++i) {
+            const char* image = _dyld_get_image_name(i);
+            if (!image || image[0] != '/' || std::strncmp(image, "/usr/lib/", 9) == 0
+                || std::strncmp(image, "/System/", 8) == 0)
+                continue;
+            char parent[1024];
+            std::snprintf(parent, sizeof parent, "%s", image);
             *std::strrchr(parent, '/') = 0;
+            bool known = false;
+            for (kal_uintptr k = 0; k < count; ++k) known = known || std::strcmp(names[k], parent) == 0;
             kal_dir d{}, a{};
-            if (kal_fs_open_dir(root(), parent + 1, std::strlen(parent + 1), &d) == kal_ok
-                && kal_fs_dir_attenuate(d, &ro, &a) == kal_ok) {
-                std::snprintf(names[count], sizeof names[count], "%s", parent);
-                grants[count] = kal_preopen{ a, names[count], std::strlen(names[count]) };
-                ++count;
-            }
+            if (known || kal_fs_open_dir(root(), parent + 1, std::strlen(parent + 1), &d) != kal_ok
+                || kal_fs_dir_attenuate(d, &ro, &a) != kal_ok)
+                continue;
+            std::snprintf(names[count], sizeof names[count], "%s", parent);
+            grants[count] = kal_preopen{ a, names[count], std::strlen(names[count]) };
+            ++count;
         }
         const int s = start("--write-raw", grants, count, kal::process::confine_flag.bits);
         check(s == 60, "a confined program is refused by the kernel what its grants do not allow, without openkal");
-        if (s != 60) std::printf("  the confined program reported %d\n", s);
+        if (s != 60) {
+            std::printf("  the confined program reported %d (ended by %d), granted:\n", s, g_ended_by);
+            for (kal_uintptr k = 0; k < count; ++k) std::printf("    %s\n", names[k]);
+        }
     } else {
         std::printf("  confinement is not claimed here\n");
     }
