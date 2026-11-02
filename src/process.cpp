@@ -670,7 +670,15 @@ int kal_process_spawn(const kal_spawn* how,
     // outright, and what this system offers instead is a WATCH, which needs a
     // live context to notice. Composing it would move the defect from "refused"
     // to "works except when it matters".
-    if (how->flags != 0) return kal_err_not_supported;
+    constexpr kal_uintptr nulls = KAL_SPAWN_NULL_IN | KAL_SPAWN_NULL_OUT | KAL_SPAWN_NULL_ERR;
+    if (how->flags & ~nulls) return kal_err_not_supported;
+    // THE NULL DEVICE BESIDE A STREAM AT ONE POSITION is two answers to one
+    // question (openkal 0.22, clause 7.15).
+    if (streams != nullptr
+        && (((how->flags & KAL_SPAWN_NULL_IN) && streams->in.h != 0)
+            || ((how->flags & KAL_SPAWN_NULL_OUT) && streams->out.h != 0)
+            || ((how->flags & KAL_SPAWN_NULL_ERR) && streams->err.h != 0)))
+        return kal_err_invalid;
     if (envc > 0 && (envp == nullptr || envp_lens == nullptr)) return kal_err_invalid;
     if (!entries_well_formed(envp, envp_lens, envc)) return kal_err_invalid;
 
@@ -768,9 +776,23 @@ int kal_process_spawn(const kal_spawn* how,
             }
             return r;
         };
-        const okm_long sin = in != 0 ? lift(in) : 0;
-        const okm_long sou = ou != 0 ? lift(ou) : 0;
-        const okm_long ser = er != 0 ? lift(er) : 0;
+        // THE NULL DEVICE (openkal 0.22), opened in the duplicate, so that the
+        // caller holds no descriptor for it; it is placed as any other source
+        // is, and its own descriptor is marked to close.
+        okm_long device = 0;
+        if (how->flags & nulls) {
+            const okm_long fd = okm::sys(okm::nr_openat, okm::at_fdcwd, reinterpret_cast<okm_long>("/dev/null"),
+                                         okm::o_rdwr | okm::o_cloexec, 0);
+            if (okm::failed(fd)) {
+                report.say(fd);
+                okm::sys(okm::nr_exit, 127);
+                for (;;) { }
+            }
+            device = lift(fd);
+        }
+        const okm_long sin = (how->flags & KAL_SPAWN_NULL_IN)  ? device : in != 0 ? lift(in) : 0;
+        const okm_long sou = (how->flags & KAL_SPAWN_NULL_OUT) ? device : ou != 0 ? lift(ou) : 0;
+        const okm_long ser = (how->flags & KAL_SPAWN_NULL_ERR) ? device : er != 0 ? lift(er) : 0;
         for (kal_uintptr i = 0; i < how->grant_count; ++i) granted[i] = lift(granted[i]);
         const okm_long work = lift(w);
 
@@ -1165,6 +1187,7 @@ kal_uintptr kal_process_props(void) { return
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
   | KAL_PROCESS_PROP_JOB | KAL_PROCESS_PROP_JOB_USAGE | KAL_PROCESS_PROP_JOB_LIMIT_SUPERVISED
   | KAL_PROCESS_PROP_OPEN_ID
+  | KAL_PROCESS_PROP_NULL_STREAMS
 #if defined(__aarch64__)
   // AND IT AGREES WITH `kal_process_stop_requested', WHICH IS A REQUIREMENT
   // AND NOT A COURTESY: the header defines null there as the absence this

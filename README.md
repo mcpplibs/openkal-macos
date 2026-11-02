@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.21.0"
+openkal = "0.22.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.19.0"
+openkal-macos = "0.20.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -166,6 +166,14 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.20 adds (openkal 0.22)
+
+**The null device at a position.** `KAL_SPAWN_NULL_IN`, `KAL_SPAWN_NULL_OUT` and
+`KAL_SPAWN_NULL_ERR` place `/dev/null` at the started program's standard input,
+output or error; `KAL_PROCESS_PROP_NULL_STREAMS` is claimed. The device is opened
+in the duplicate that becomes the program, so the caller holds no descriptor for
+it. A flag beside a stream at the same position is `kal_err_invalid`.
 
 ## What 0.19 adds (openkal 0.21)
 
