@@ -191,7 +191,9 @@ before it is replaced.
 
 **Observation.** A fault is reported on an alternate stack, naming each frame's
 file from `proc_pidinfo(PROC_PIDREGIONPATHINFO)` and its symbol from the file's
-Mach-O or ELF table. Samples are `ITIMER_PROF` and `SIGPROF`. `kal_process_info`
+Mach-O or ELF table. Samples are `ITIMER_PROF` and `SIGPROF`; touches are a part
+made readable and not executable, each page made executable again at its first
+execution (`SIGBUS` or `SIGSEGV`) and recorded. `kal_process_info`
 reports faults from `getrusage` for this program and `PROC_PIDTASKINFO` for
 another; `kal_memory_info` is `hw.memsize` and `kern.memorystatus_level`.
 

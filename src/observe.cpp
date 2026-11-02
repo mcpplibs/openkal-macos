@@ -9,6 +9,7 @@
 // only inside the stack of the context it interrupted.
 #include "sys.h"
 #include <openkal/debug.h>
+#include <openkal/exec.h>
 #include <openkal/prof.h>
 #include <openkal/task.h>
 
@@ -278,7 +279,15 @@ struct macos_sigaction {
 constexpr int sa_onstack = 0x1, sa_restart = 0x2, sa_resethand = 0x4, sa_siginfo = 0x40;
 constexpr okm_long nr_sigaction = 46;
 
-bool install(int signo, void (*handler)(int, void*, void*), int flags, macos_sigaction* before) {
+// What the kernel reports of a disposition: its own `struct sigaction', which
+// carries no trampoline (the one it is given carries one).
+struct macos_old {
+    void (*handler)(int, void*, void*);
+    unsigned int mask;
+    int flags;
+};
+
+bool install(int signo, void (*handler)(int, void*, void*), int flags, macos_old* before) {
 #if defined(__aarch64__)
     macos_sigaction act{ handler, &okm_sigtramp, 0, flags };
     return !okm::failed(okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&act),
@@ -289,11 +298,23 @@ bool install(int signo, void (*handler)(int, void*, void*), int flags, macos_sig
 #endif
 }
 
+// A disposition reported by the kernel, given back.
+void restore(int signo, const macos_old& old) {
+#if defined(__aarch64__)
+    macos_sigaction act{ old.handler, &okm_sigtramp, old.mask, old.flags };
+    okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&act), 0);
+#else
+    (void)signo; (void)old;
+#endif
+}
+
 alignas(16) unsigned char g_alt_stack[256 * 1024];
 
-// INSTALLED AT INCEPTION, on a stack of its own; the handler is the default
-// again once it has run, so the fault repeats and the program ends as this
-// system ends it, its report kept.
+// INSTALLED AT INCEPTION, on a stack of its own. Having reported, the handler
+// gives the signal its default disposition again, so the fault repeats and the
+// program ends as this system ends it, its report kept; it is not reset on
+// entry, because a fault that is a touch being recorded (below) is resolved
+// and the program continues.
 [[gnu::constructor(103)]] void install_fault_report() {
     if (!kHandlers) return;
     struct { void* sp; okm_uptr size; int flags; } ss{ g_alt_stack, sizeof g_alt_stack, 0 };
@@ -303,8 +324,81 @@ alignas(16) unsigned char g_alt_stack[256 * 1024];
         struct { void* handler; unsigned int mask; int flags; } old{};
         if (okm::failed(okm::sys(nr_sigaction, signo, 0, reinterpret_cast<okm_long>(&old)))) continue;
         if (old.handler != nullptr) continue;   // the disposition the program was started with is its own
-        install(signo, &okm_fault_handler, sa_siginfo | sa_onstack | sa_resethand, nullptr);
+        install(signo, &okm_fault_handler, sa_siginfo | sa_onstack, nullptr);
     }
+}
+
+// --- touches (0.23) ------------------------------------------------------------------
+//
+// A part being recorded is made readable and not executable; its first
+// execution of a page is a fault (SIGBUS or SIGSEGV, as this kernel reports a
+// protection) the handler resolves --- the page made executable again, its
+// address recorded once --- and the instruction is carried out.
+struct touched_part {
+    okm_uptr from = 0, to = 0;
+    int prot = 0;
+    volatile unsigned char* seen = nullptr;
+};
+constexpr int kTouchedParts = 16;
+touched_part g_parts[kTouchedParts];
+volatile int g_part_count = 0;
+volatile int g_touching = 0;
+okm_uptr g_touch_page = 16384;
+
+struct touch_ring {
+    okm_uptr* pages = nullptr;
+    volatile okm_uptr* ready = nullptr;
+    okm_uptr cap = 0;
+    volatile okm_uptr written = 0, taken = 0;
+};
+touch_ring g_touches;
+macos_old g_before[2]{};             // SIGBUS, SIGSEGV, where they were not this handler's
+bool g_replaced[2] = {};
+
+// The protection of [from, to), region by region (PROC_PIDREGIONINFO): one for
+// all of it, or -1.
+int protection_of(okm_uptr from, okm_uptr to) {
+    static okm_long self = 0;
+    if (self == 0) self = okm::sys(okm::nr_getpid);
+    int prot = -2;
+    for (okm_uptr at = from; at < to;) {
+        alignas(8) unsigned char info[96] = {};
+        const okm_long r = okm::sys(okm::nr_proc_info, 2 /* PROC_INFO_CALL_PIDINFO */, self, 7 /* PROC_PIDREGIONINFO */,
+                                    static_cast<okm_long>(at), reinterpret_cast<okm_long>(info), sizeof info);
+        if (okm::failed(r) || r < static_cast<okm_long>(sizeof info)) return -1;
+        okm_u32 here = 0; okm_u64 start = 0, size = 0;
+        okm::copy(&here, info, 4);
+        okm::copy(&start, info + 80, 8);
+        okm::copy(&size, info + 88, 8);
+        if (start > at || size == 0) return -1;   // a hole
+        if (prot == -2) prot = static_cast<int>(here); else if (prot != static_cast<int>(here)) return -1;
+        at = start + size;
+    }
+    return prot;
+}
+
+bool touched(int signo, const siginfo_head* si) {
+    if ((signo != 10 && signo != 11) || !__atomic_load_n(&g_touching, __ATOMIC_ACQUIRE) || si == nullptr) return false;
+    const okm_uptr addr = si->addr;
+    const int n = __atomic_load_n(&g_part_count, __ATOMIC_ACQUIRE);
+    for (int k = 0; k < n; ++k) {
+        touched_part& t = g_parts[k];
+        if (addr < t.from || addr >= t.to) continue;
+        const okm_uptr page = addr & ~(g_touch_page - 1);
+        const okm_uptr index = (page - t.from) / g_touch_page;
+        const unsigned char bit = static_cast<unsigned char>(1u << (index & 7));
+        const unsigned char was = __atomic_fetch_or(&t.seen[index >> 3], bit, __ATOMIC_ACQ_REL);
+        okm::sys(okm::nr_mprotect, static_cast<okm_long>(page), static_cast<okm_long>(g_touch_page), t.prot);
+        if (!(was & bit) && g_touches.pages) {
+            const okm_uptr mine = __atomic_fetch_add(&g_touches.written, 1, __ATOMIC_ACQ_REL);
+            if (mine - __atomic_load_n(&g_touches.taken, __ATOMIC_ACQUIRE) < g_touches.cap) {
+                g_touches.pages[mine % g_touches.cap] = page;
+                __atomic_store_n(&g_touches.ready[mine % g_touches.cap], mine + 1, __ATOMIC_RELEASE);
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 // --- samples ---------------------------------------------------------------------
@@ -317,7 +411,7 @@ struct ring {
     volatile int on = 0;
 };
 ring g_ring;
-macos_sigaction g_prof_before{};
+macos_old g_prof_before{};
 
 kal_u64 monotonic();
 
@@ -331,6 +425,14 @@ kal_u64 monotonic() { return clock_gettime_nsec_np(4 /* CLOCK_UPTIME_RAW */); }
 
 extern "C" void okm_fault_handler(int signo, void* info, void* uc) {
     const auto* si = static_cast<const siginfo_head*>(info);
+    if (touched(signo, si)) return;
+    // A fault that is not a touch, met while the signal was the program's.
+    const int which = signo == 10 ? 0 : signo == 11 ? 1 : -1;
+    if (which >= 0 && g_replaced[which] && g_before[which].handler != nullptr
+        && reinterpret_cast<void*>(g_before[which].handler) != reinterpret_cast<void*>(1)) {
+        g_before[which].handler(signo, info, uc);
+        return;
+    }
     line l;
     l.s("openkal: fault: ").s(fault_name(signo)).s(" at ").hex(si ? si->addr : 0).s("\n");
     l.out(2);
@@ -342,6 +444,9 @@ extern "C" void okm_fault_handler(int signo, void* info, void* uc) {
         l.s("\n");
         l.out(2);
     }
+    // The default disposition, and the fault repeats as this system's.
+    struct { void* handler; void* tramp; unsigned int mask; int flags; } standard{};
+    okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&standard), 0);
 }
 
 extern "C" void okm_sample_handler(int, void*, void* uc) {
@@ -384,7 +489,7 @@ int  kal_prof_active(void) { return 0; }
 int  kal_prof_counter(const char*, kal_uintptr, const volatile kal_u64*) { return kal_ok; }
 void kal_prof_mark(const char*, kal_uintptr, int) {}
 
-kal_uintptr kal_prof_props(void) { return kHandlers ? KAL_PROF_PROP_SAMPLES : 0; }
+kal_uintptr kal_prof_props(void) { return kHandlers ? KAL_PROF_PROP_SAMPLES | KAL_PROF_PROP_TOUCHES : 0; }
 
 int kal_prof_sample_begin(kal_u32 per_second) {
     if (!kHandlers) return kal_err_not_supported;
@@ -410,7 +515,7 @@ int kal_prof_sample_begin(kal_u32 per_second) {
                                                                           us / 1000000, static_cast<int>(us % 1000000), 0 };
     if (okm::failed(okm::sys(okm::nr_setitimer, 2 /* ITIMER_PROF */, reinterpret_cast<okm_long>(&it), 0))) {
         __atomic_store_n(&g_ring.on, 0, __ATOMIC_RELEASE);
-        okm::sys(nr_sigaction, 27, reinterpret_cast<okm_long>(&g_prof_before), 0);
+        restore(27, g_prof_before);
         return kal_err_not_supported;
     }
     return kal_ok;
@@ -434,7 +539,80 @@ int kal_prof_sample_end(void) {
     struct { okm_i64 is; int ius; int p1; okm_i64 vs; int vus; int p2; } stop{};
     okm::sys(okm::nr_setitimer, 2, reinterpret_cast<okm_long>(&stop), 0);
     __atomic_store_n(&g_ring.on, 0, __ATOMIC_RELEASE);
-    okm::sys(nr_sigaction, 27, reinterpret_cast<okm_long>(&g_prof_before), 0);
+    restore(27, g_prof_before);
+    return kal_ok;
+}
+
+// TOUCHES (0.23).
+int kal_prof_touch_begin(const void* at, kal_uintptr size) {
+    if (!kHandlers) return kal_err_not_supported;
+    const okm_uptr g = kal_exec_granularity();
+    const okm_uptr from = reinterpret_cast<okm_uptr>(at);
+    if (size == 0 || (from & (g - 1)) != 0 || (size & (g - 1)) != 0) return kal_err_invalid;
+    const int prot = protection_of(from, from + size);
+    if (prot < 0 || !(prot & okm::prot_exec)) return kal_err_invalid;
+    if (__atomic_load_n(&g_part_count, __ATOMIC_ACQUIRE) == kTouchedParts) return kal_err_no_memory;
+    g_touch_page = g;
+    if (!g_touches.pages) {
+        constexpr okm_uptr cap = 65536;
+        const okm_long m = okm::sys(okm::nr_mmap, 0, static_cast<okm_long>(cap * 2 * sizeof(okm_uptr)),
+                                    okm::prot_read | okm::prot_write, okm::map_private | okm::map_anon, -1, 0);
+        if (okm::failed(m)) return kal_err_no_memory;
+        g_touches.pages = reinterpret_cast<okm_uptr*>(m);
+        g_touches.ready = reinterpret_cast<volatile okm_uptr*>(m + static_cast<okm_long>(cap * sizeof(okm_uptr)));
+        g_touches.cap = cap;
+    }
+    const okm_uptr bits = (size / g + 7) / 8;
+    const okm_long b = okm::sys(okm::nr_mmap, 0, static_cast<okm_long>(bits), okm::prot_read | okm::prot_write,
+                                okm::map_private | okm::map_anon, -1, 0);
+    if (okm::failed(b)) return kal_err_no_memory;
+    static const int signals[2] = { 10, 11 };
+    for (int i = 0; i < 2; ++i) {
+        macos_old now{};
+        okm::sys(nr_sigaction, signals[i], 0, reinterpret_cast<okm_long>(&now));
+        if (now.handler == &okm_fault_handler) continue;
+        g_before[i] = now;
+        g_replaced[i] = true;
+        install(signals[i], &okm_fault_handler, sa_siginfo | sa_onstack, nullptr);
+    }
+    const int k = __atomic_load_n(&g_part_count, __ATOMIC_ACQUIRE);
+    g_parts[k] = touched_part{ from, from + size, prot, reinterpret_cast<volatile unsigned char*>(b) };
+    __atomic_store_n(&g_part_count, k + 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_touching, 1, __ATOMIC_RELEASE);
+    const okm_long r = okm::sys(okm::nr_mprotect, static_cast<okm_long>(from), static_cast<okm_long>(size),
+                                prot & ~okm::prot_exec);
+    if (okm::failed(r)) {
+        __atomic_store_n(&g_part_count, k, __ATOMIC_RELEASE);
+        return okm::translate(r);
+    }
+    return kal_ok;
+}
+
+kal_intptr kal_prof_touch_take(kal_uintptr* out, kal_uintptr count) {
+    if (out == nullptr && count != 0) return -static_cast<kal_intptr>(kal_err_invalid);
+    if (!g_touches.pages) return 0;
+    kal_uintptr n = 0;
+    while (n < count) {
+        const okm_uptr t = __atomic_load_n(&g_touches.taken, __ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&g_touches.ready[t % g_touches.cap], __ATOMIC_ACQUIRE) != t + 1) break;
+        out[n++] = g_touches.pages[t % g_touches.cap];
+        __atomic_store_n(&g_touches.taken, t + 1, __ATOMIC_RELEASE);
+    }
+    return static_cast<kal_intptr>(n);
+}
+
+// Every part as it was; the pages' bits stay for the life of the program.
+int kal_prof_touch_end(void) {
+    const int n = __atomic_load_n(&g_part_count, __ATOMIC_ACQUIRE);
+    if (n == 0) return kal_err_invalid;
+    for (int k = 0; k < n; ++k)
+        okm::sys(okm::nr_mprotect, static_cast<okm_long>(g_parts[k].from),
+                 static_cast<okm_long>(g_parts[k].to - g_parts[k].from), g_parts[k].prot);
+    __atomic_store_n(&g_touching, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_part_count, 0, __ATOMIC_RELEASE);
+    static const int signals[2] = { 10, 11 };
+    for (int i = 0; i < 2; ++i)
+        if (g_replaced[i]) { restore(signals[i], g_before[i]); g_replaced[i] = false; }
     return kal_ok;
 }
 
