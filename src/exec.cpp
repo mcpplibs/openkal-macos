@@ -243,7 +243,8 @@ int kal_exec_map_part(void* region, kal_uintptr offset, kal_uintptr size, kal_fi
     const int fd = okm::unpack(f.h);
     if (region == nullptr || size == 0 || fd < 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
         || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0 || at % KAL_MAP_ALIGNMENT != 0
-        || (how & ~(KAL_EXEC_MAP_EXECUTE | KAL_EXEC_MAP_PREFETCH | KAL_EXEC_MAP_BTI)) != 0)
+        || (how & ~(KAL_EXEC_MAP_EXECUTE | KAL_EXEC_MAP_PREFETCH | KAL_EXEC_MAP_BTI | KAL_EXEC_MAP_WRITE)) != 0
+        || ((how & KAL_EXEC_MAP_WRITE) && (how & KAL_EXEC_MAP_EXECUTE)))
         return kal_err_invalid;
     okm::kstat64 st{};
     const okm_long s = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
@@ -251,7 +252,10 @@ int kal_exec_map_part(void* region, kal_uintptr offset, kal_uintptr size, kal_fi
     if ((okm::stat_mode(st) & okm::s_ifmt) != okm::s_ifreg) return kal_err_not_supported;
     const kal_u64 length = st.size > 0 ? static_cast<kal_u64>(st.size) : 0;
     if (at > length || static_cast<kal_u64>(size) > length - at) return kal_err_invalid;
-    const okm_long prot = okm::prot_read | ((how & KAL_EXEC_MAP_EXECUTE) ? okm::prot_exec : 0);
+    // WRITTEN PRIVATELY (0.23): a private mapping, so a page written is the
+    // program's own copy.
+    const okm_long prot = okm::prot_read | ((how & KAL_EXEC_MAP_EXECUTE) ? okm::prot_exec : 0)
+                        | ((how & KAL_EXEC_MAP_WRITE) ? okm::prot_write : 0);
     const okm_long r = okm::sys(okm::nr_mmap,
                                 reinterpret_cast<okm_long>(static_cast<char*>(region) + offset),
                                 static_cast<okm_long>(size), prot, okm::map_private | okm::map_fixed, fd,
