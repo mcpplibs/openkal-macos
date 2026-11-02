@@ -1,6 +1,7 @@
 #include "sys.h"
 #include <openkal/env.h>
 
+namespace okm { int resource_preference(); }
 namespace okm {
 
 // The vectors this system passes to a program's entry point. They are recorded
@@ -168,4 +169,35 @@ kal_intptr kal_env_system(char* out, kal_uintptr cap) {
     return give("macos", 5, out, cap);
 }
 
+// THE RESOURCE PREFERENCE (0.23), which a start conveys in KAL_RESOURCES
+// (process.cpp) and a person sets the same way. This system has no transparent
+// huge pages to turn off; the preference sizes what this implementation keeps.
+int kal_env_resources(void) { return okm::resource_preference(); }
+
 }
+
+namespace okm {
+int resource_preference() {
+    static int known = -1;
+    int v = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    if (v >= 0) return v;
+    v = 0;
+    constexpr char key[] = "KAL_RESOURCES=";
+    constexpr okm_uptr key_len = sizeof key - 1;
+    for (char** e = okm::g_envp; e && *e; ++e) {
+        okm_uptr i = 0;
+        while (i < key_len && (*e)[i] == key[i]) ++i;
+        if (i != key_len) continue;
+        const char* val = *e + key_len;
+        auto is = [&](const char* w) {
+            okm_uptr k = 0;
+            while (w[k] && val[k] == w[k]) ++k;
+            return w[k] == '\0' && val[k] == '\0';
+        };
+        v = is("performance") ? 1 : is("economy") ? 2 : 0;
+        break;
+    }
+    __atomic_store_n(&known, v, __ATOMIC_RELAXED);
+    return v;
+}
+}  // namespace okm

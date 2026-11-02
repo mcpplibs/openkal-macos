@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.22.0"
+openkal = "0.23.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.20.0"
+openkal-macos = "0.21.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -166,6 +166,36 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.21 adds (openkal 0.23)
+
+**A region at an address.** `kal_exec_alloc_at` passes the address as a hint,
+which this kernel honours where nothing is there, and releases a mapping placed
+elsewhere: `MAP_FIXED` would replace what is there. `KAL_EXEC_PROP_PLACE` is
+claimed where executable memory is available.
+
+**A part sealed, a part read in.** `kal_exec_seal_part` lowers the part's
+greatest protection with `mach_vm_protect` for `KAL_EXEC_SEAL_FOREVER`, which
+this kernel does not raise again; `KAL_EXEC_MAP_PREFETCH` is `MADV_WILLNEED`.
+
+**A handle with less** (`kal_fs_dir_attenuate`), with its record and the
+statement that nothing beneath changes: the table openkal-linux keeps, with the
+listing read by `getdirentries64` and a record reopened to append through the
+name `F_GETPATH` gives. **A listing with attributes**: `getattrlistbulk` returns
+a batch of entries with their kind, size, time and identity, and
+`KAL_FS_PROP_LIST_INFO` is claimed.
+
+**Confinement** (`KAL_SPAWN_CONFINE`): a sandbox profile written from the grants
+and their rights, applied with `sandbox_init_with_parameters` in the duplicate
+before it is replaced.
+
+**Observation.** A fault is reported on an alternate stack, naming each frame's
+file from `proc_pidinfo(PROC_PIDREGIONPATHINFO)` and its symbol from the file's
+Mach-O or ELF table. Samples are `ITIMER_PROF` and `SIGPROF`; touches are a part
+made readable and not executable, each page made executable again at its first
+execution (`SIGBUS` or `SIGSEGV`) and recorded. `kal_process_info`
+reports faults from `getrusage` for this program and `PROC_PIDTASKINFO` for
+another; `kal_memory_info` is `hw.memsize` and `kern.memorystatus_level`.
 
 ## What 0.20 adds (openkal 0.22)
 

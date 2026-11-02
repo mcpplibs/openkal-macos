@@ -201,4 +201,43 @@ kal_uintptr kal_memory_granularity(void) {
     return static_cast<kal_uintptr>(page_size());
 }
 
+// WHAT THE ENVIRONMENT CAN GIVE (0.23): the machine's memory (`hw.memsize'),
+// and of it the share this system's memory pressure states available
+// (`kern.memorystatus_level', a percentage), each asked by number.
+int kal_memory_info(kal_memory_status* out) {
+    if (out == nullptr || out->self_size < 2 * sizeof(kal_u32)) return kal_err_invalid;
+    const kal_u32 self = out->self_size;
+    kal_memory_status v{};
+    v.self_size = self;
+    int mib[2] = { 6 /* CTL_HW */, 24 /* HW_MEMSIZE */ };
+    okm_u64 total = 0;
+    okm_uptr length = sizeof total;
+    if (!okm::failed(okm::sys(okm::nr_sysctl, reinterpret_cast<okm_long>(mib), 2, reinterpret_cast<okm_long>(&total),
+                              reinterpret_cast<okm_long>(&length), 0, 0)) && total != 0) {
+        v.total_bytes = total;
+        v.present |= KAL_MSTATUS_TOTAL;
+        static const char name[] = "kern.memorystatus_level";
+        int lookup[2] = { 0, 3 };
+        int oid[8] = {};
+        okm_uptr oid_length = sizeof oid;
+        if (!okm::failed(okm::sys(okm::nr_sysctl, reinterpret_cast<okm_long>(lookup), 2,
+                                  reinterpret_cast<okm_long>(oid), reinterpret_cast<okm_long>(&oid_length),
+                                  reinterpret_cast<okm_long>(name), static_cast<okm_long>(sizeof name - 1)))
+            && oid_length >= sizeof(int)) {
+            int level = 0;
+            okm_uptr ll = sizeof level;
+            if (!okm::failed(okm::sys(okm::nr_sysctl, reinterpret_cast<okm_long>(oid),
+                                      static_cast<okm_long>(oid_length / sizeof(int)),
+                                      reinterpret_cast<okm_long>(&level), reinterpret_cast<okm_long>(&ll), 0, 0))
+                && level >= 0 && level <= 100) {
+                v.available_bytes = total / 100 * static_cast<okm_u64>(level);
+                v.present |= KAL_MSTATUS_AVAILABLE;
+            }
+        }
+    }
+    const kal_u32 n = self < sizeof v ? self : static_cast<kal_u32>(sizeof v);
+    okm::copy(reinterpret_cast<char*>(out), reinterpret_cast<const char*>(&v), n);
+    return kal_ok;
+}
+
 }
