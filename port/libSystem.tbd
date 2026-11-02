@@ -46,6 +46,13 @@ current-version: 1351.0.0
 # linking a program that calls the enquiry and reading what the linker asked
 # for, after a first attempt that had the pair the wrong way round.
 #
+# THREE MORE IN 0.21.0 (openkal 0.23): a part's greatest protection lowered,
+# which is a routine of this system's Mach interface and not a call
+# (`mach_vm_protect', and the task it is asked of, `mach_task_self_'), and a
+# started program held to its grants (`sandbox_init_with_parameters'). The same
+# rule admits them: this system's library defines them, and no C library in
+# this ecosystem does.
+#
 # `dyld_stub_binder' is not called by anything here or in any source: it is
 # referenced by the LINKER, for the lazy binding it emits, and it is therefore a
 # requirement of the object format rather than of this package.
@@ -65,5 +72,6 @@ exports:
                    _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
                    _pthread_get_stackaddr_np, _pthread_get_stacksize_np,
                    _pthread_set_qos_class_self_np, _pthread_threadid_np,
-                   __pthread_self, dyld_stub_binder ]
+                   __pthread_self, dyld_stub_binder,
+                   _mach_task_self_, _mach_vm_protect, _sandbox_init_with_parameters ]
 ...

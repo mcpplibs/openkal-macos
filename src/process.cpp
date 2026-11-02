@@ -1,5 +1,18 @@
 #include "sys.h"
 #include "handle.h"
+#include "rights.h"
+
+// This system's sandbox, which its library supplies and no C library in this
+// ecosystem defines (port/libSystem.tbd); and the parts of its `fork' a
+// confined start duplicates with (space.cpp).
+extern "C" int sandbox_init_with_parameters(const char* profile, unsigned long long flags,
+                                            const char* const parameters[], char** error);
+namespace okm {
+int resource_preference();
+void fork_prepare();
+void fork_parent();
+void fork_child();
+}
 #include <openkal/process.h>
 #include <openkal/memory.h>
 #include <openkal/task.h>
@@ -21,9 +34,78 @@ namespace {
 
 constexpr kal_uintptr kMaxEntries = 512;
 
+// --- confinement (0.23): this system's sandbox ---------------------------------
+//
+// THE RULES ARE THIS SYSTEM'S PROFILE LANGUAGE, applied to the started program
+// before it is replaced (`sandbox_init_with_parameters'), and kept across the
+// replacement. Everything is allowed but reading a file's content outside the
+// grants and this system's own libraries, and writing outside the grants that
+// are not read-only and the devices a program writes to. Asking whether a name
+// exists, and what it is, is not refused: it reveals what the name is, which
+// the rule above already allows a program to learn by trying.
+struct profile {
+    char     text[16384];
+    okm_uptr n = 0;
+    bool put(const char* s) { while (*s) { if (n + 1 >= sizeof text) return false; text[n++] = *s++; } text[n] = '\0'; return true; }
+    bool quoted(const char* s) {
+        if (!put("\"")) return false;
+        for (; *s; ++s) {
+            if (n + 3 >= sizeof text) return false;
+            if (*s == '"' || *s == '\\') text[n++] = '\\';
+            text[n++] = *s;
+        }
+        text[n] = '\0';
+        return put("\"");
+    }
+    bool build(const okm_long* grants, const okm_u32* rights, kal_uintptr g, const char* program) {
+        char path[1024];
+        bool ok = put("(version 1)\n(allow default)\n(deny file-write* (require-not (require-any"
+                      " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\")");
+        for (kal_uintptr i = 0; ok && i < g; ++i) {
+            if (rights[i] & okm::rights::read_only) continue;
+            if (okm::failed(okm::sys(okm::nr_fcntl, grants[i], okm::f_getpath, reinterpret_cast<okm_long>(path)))) continue;
+            ok = put(" (subpath ") && quoted(path) && put(")");
+        }
+        ok = ok && put(")))\n(deny file-read-data (require-not (require-any"
+                       " (subpath \"/System\") (subpath \"/usr/lib\") (subpath \"/usr/share\")"
+                       " (subpath \"/private/var/db/dyld\") (subpath \"/Library/Apple\") (subpath \"/dev\")"
+                       " (literal ") && quoted(program) && put(")");
+        for (kal_uintptr i = 0; ok && i < g; ++i) {
+            if (okm::failed(okm::sys(okm::nr_fcntl, grants[i], okm::f_getpath, reinterpret_cast<okm_long>(path)))) continue;
+            ok = put(" (subpath ") && quoted(path) && put(")");
+        }
+        return ok && put(")))\n");
+    }
+};
+
 constexpr char     kPreopens[]  = "KAL_PREOPENS=";
 constexpr okm_uptr kPreopensLen = sizeof kPreopens - 1;
 constexpr okm_uptr kPidDigits   = 10;
+
+// THE TWO VARIABLES 0.23 WRITES BESIDE IT: what each grant carries
+// (`KAL_GRANT_RIGHTS', read in fs.cpp) and the started program's resource
+// preference (`KAL_RESOURCES', read in env.cpp). A value of either the caller
+// supplied is left out.
+constexpr char     kRights[]     = "KAL_GRANT_RIGHTS=";
+constexpr okm_uptr kRightsLen    = sizeof kRights - 1;
+constexpr char     kResources[]  = "KAL_RESOURCES=";
+constexpr okm_uptr kResourcesLen = sizeof kResources - 1;
+
+bool starts_with(const char* s, kal_uintptr n, const char* key, okm_uptr klen) {
+    if (n < klen) return false;
+    for (okm_uptr i = 0; i < klen; ++i) if (s[i] != key[i]) return false;
+    return true;
+}
+
+// What one start conveys beside the grants' names.
+struct conveyance {
+    char        rights[4096];
+    okm_uptr    rights_len = 0;
+    bool        any_rights = false;
+    okm_long    record_src[16];
+    kal_uintptr records = 0;
+    const char* resources = nullptr;
+};
 
 bool names_preopens(const char* s, kal_uintptr n) {
     if (n < kPreopensLen) return false;
@@ -143,14 +225,19 @@ struct vector {
     // is never forwarded; one is added only when the caller asked for grants,
     // and asking for none (a count of zero) is a value with no entries.
     char*    pid_digits = nullptr;
+    char*    rights_pid_digits = nullptr;
 
     bool build_env(const char** items, const kal_uintptr* lens, kal_uintptr n,
-                   const kal_preopen* grants, kal_uintptr g) {
+                   const kal_preopen* grants, kal_uintptr g, const conveyance& c) {
         if (n > kMaxEntries) { ok = false; return false; }
+        auto left_out = [&](const char* s, kal_uintptr l) {
+            return names_preopens(s, l) || starts_with(s, l, kRights, kRightsLen)
+                || starts_with(s, l, kResources, kResourcesLen);
+        };
         kal_uintptr kept = 0;
         okm_uptr total = 0;
         for (kal_uintptr i = 0; i < n; ++i) {
-            if (names_preopens(items[i], lens[i])) continue;
+            if (left_out(items[i], lens[i])) continue;
             ++kept; total += lens[i] + 1;
         }
         okm_uptr extra = 0;
@@ -159,14 +246,18 @@ struct vector {
             for (kal_uintptr i = 0; i < g; ++i)
                 extra += 3 + digits(3 + i) + digits(grants[i].len) + grants[i].len;
         }
-        slots_bytes = (kept + (grants ? 1 : 0) + 1) * sizeof(char*);
+        if (c.any_rights) extra += kRightsLen + kPidDigits + c.rights_len + 1;
+        const okm_uptr res_len = c.resources ? okm::length(c.resources) : 0;
+        if (c.resources) extra += kResourcesLen + res_len + 1;
+        slots_bytes = (kept + (grants ? 1 : 0) + (c.any_rights ? 1 : 0) + (c.resources ? 1 : 0) + 1)
+                    * sizeof(char*);
         bytes_bytes = total + extra == 0 ? 1 : total + extra;
         slots = static_cast<char**>(kal_alloc(slots_bytes, alignof(char*)));
         bytes = static_cast<char*>(kal_alloc(bytes_bytes, 1));
         if (!slots || !bytes) { ok = false; return false; }
         okm_uptr at = 0, k = 0;
         for (kal_uintptr i = 0; i < n; ++i) {
-            if (names_preopens(items[i], lens[i])) continue;
+            if (left_out(items[i], lens[i])) continue;
             okm::copy(bytes + at, items[i], lens[i]);
             bytes[at + lens[i]] = '\0';
             slots[k++] = bytes + at;
@@ -185,6 +276,25 @@ struct vector {
                 okm::copy(o, grants[i].name, grants[i].len); o += grants[i].len;
             }
             *o = '\0';
+            at = static_cast<okm_uptr>(o + 1 - bytes);
+        }
+        if (c.any_rights) {
+            char* o = bytes + at;
+            slots[k++] = o;
+            okm::copy(o, kRights, kRightsLen); o += kRightsLen;
+            rights_pid_digits = o;
+            okm::fill(o, '0', kPidDigits); o += kPidDigits;
+            okm::copy(o, c.rights, c.rights_len); o += c.rights_len;
+            *o = '\0';
+            at = static_cast<okm_uptr>(o + 1 - bytes);
+        }
+        if (c.resources) {
+            char* o = bytes + at;
+            slots[k++] = o;
+            okm::copy(o, kResources, kResourcesLen); o += kResourcesLen;
+            okm::copy(o, c.resources, res_len); o += res_len;
+            *o = '\0';
+            at = static_cast<okm_uptr>(o + 1 - bytes);
         }
         slots[k] = nullptr;
         return true;
@@ -192,10 +302,14 @@ struct vector {
 
     // In the duplicate, which is the first point at which the number is known.
     void stamp(okm_long pid) const {
-        if (!pid_digits) return;
-        for (int i = static_cast<int>(kPidDigits) - 1; i >= 0; --i) {
-            pid_digits[i] = static_cast<char>('0' + pid % 10);
-            pid /= 10;
+        char* const where[2] = { pid_digits, rights_pid_digits };
+        for (char* d : where) {
+            if (!d) continue;
+            okm_long v = pid;
+            for (int i = static_cast<int>(kPidDigits) - 1; i >= 0; --i) {
+                d[i] = static_cast<char>('0' + v % 10);
+                v /= 10;
+            }
         }
     }
 
@@ -636,7 +750,11 @@ int kal_process_info(kal_process p, kal_u32 wanted, kal_program_info* out) {
     // MEMORY (openkal 0.20): the footprint now and at most; of a started
     // program that has ended, the peak from the record the kernel keeps until it
     // is collected. Only where the structure has room for the fields.
-    if ((wanted & KAL_PINFO_MEMORY) && self >= sizeof v
+    // Where the caller's structure reaches the fields: one built for 0.22 ends
+    // with them, and is answered as it was.
+    constexpr kal_u32 memory_end = static_cast<kal_u32>(__builtin_offsetof(kal_program_info, memory_peak_bytes) + 8);
+    constexpr kal_u32 faults_end = static_cast<kal_u32>(__builtin_offsetof(kal_program_info, faults_major) + 8);
+    if ((wanted & KAL_PINFO_MEMORY) && self >= memory_end
         && (!ended || handle_kind(p) == kind_child)) {
         okm_u64 now = 0, peak = 0;
         if (footprint(handle_kind(p) == kind_self ? okm::sys(okm::nr_getpid) : pid, now, peak)) {
@@ -644,6 +762,32 @@ int kal_process_info(kal_process p, kal_u32 wanted, kal_program_info* out) {
             v.memory_peak_bytes = peak;
             v.present |= KAL_PINFO_MEMORY;
         }
+    }
+    // PAGE FAULTS (0.23): this program's from the kernel's account of it
+    // (`getrusage'), a running one's from its task (PROC_PIDTASKINFO: every
+    // fault, and those that read a page in). Of an ended program this kernel
+    // keeps no count of faults, and none is reported.
+    if ((wanted & (KAL_PINFO_FAULTS | KAL_PINFO_MAJOR)) && self >= faults_end && !ended) {
+        okm_u64 minor = 0, major = 0;
+        bool ok = false;
+        if (handle_kind(p) == kind_self) {
+            okm_long ru[18] = {};
+            ok = !okm::failed(okm::sys(okm::nr_getrusage, 0 /* RUSAGE_SELF */, reinterpret_cast<okm_long>(ru)));
+            minor = static_cast<okm_u64>(ru[8]); major = static_cast<okm_u64>(ru[9]);
+        } else {
+            alignas(8) unsigned char ti[96] = {};
+            const okm_long r = okm::sys(okm::nr_proc_info, 2 /* PROC_INFO_CALL_PIDINFO */, pid,
+                                        4 /* PROC_PIDTASKINFO */, 0, reinterpret_cast<okm_long>(ti), sizeof ti);
+            if (!okm::failed(r) && r >= 64) {
+                int faults = 0, pageins = 0;
+                okm::copy(&faults, ti + 52, 4);
+                okm::copy(&pageins, ti + 56, 4);
+                major = static_cast<okm_u64>(pageins);
+                minor = faults > pageins ? static_cast<okm_u64>(faults - pageins) : 0;
+                ok = true;
+            }
+        }
+        if (ok) { v.faults_minor = minor; v.faults_major = major; v.present |= KAL_PINFO_FAULTS | KAL_PINFO_MAJOR; }
     }
     const kal_u32 n = self < sizeof v ? self : static_cast<kal_u32>(sizeof v);
     okm::copy(reinterpret_cast<char*>(out), reinterpret_cast<const char*>(&v), n);
@@ -671,7 +815,13 @@ int kal_process_spawn(const kal_spawn* how,
     // live context to notice. Composing it would move the defect from "refused"
     // to "works except when it matters".
     constexpr kal_uintptr nulls = KAL_SPAWN_NULL_IN | KAL_SPAWN_NULL_OUT | KAL_SPAWN_NULL_ERR;
-    if (how->flags & ~nulls) return kal_err_not_supported;
+    constexpr kal_uintptr preferences = KAL_SPAWN_RESOURCES_BALANCED | KAL_SPAWN_RESOURCES_PERFORMANCE
+                                      | KAL_SPAWN_RESOURCES_ECONOMY;
+    if (how->flags & ~(nulls | preferences | KAL_SPAWN_CONFINE)) return kal_err_not_supported;
+    // ONE PREFERENCE (0.23).
+    const kal_uintptr preference = how->flags & preferences;
+    if ((preference & (preference - 1)) != 0) return kal_err_invalid;
+    const bool confine = (how->flags & KAL_SPAWN_CONFINE) != 0;
     // THE NULL DEVICE BESIDE A STREAM AT ONE POSITION is two answers to one
     // question (openkal 0.22, clause 7.15).
     if (streams != nullptr
@@ -701,9 +851,44 @@ int kal_process_spawn(const kal_spawn* how,
         granted[i] = fd;
     }
 
+    // WHAT EACH GRANT CARRIES, AND THE PREFERENCE (0.23).
+    conveyance carry;
+    okm_u32 grant_rights[max_grants] = {};
+    for (kal_uintptr i = 0; i < how->grant_count; ++i) {
+        okm_u32 flags = 0; int record = -1; const char* prefix = ""; okm_uptr plen = 0;
+        if (!okm::rights::conveyed(static_cast<int>(granted[i]), &flags, &record, &prefix, &plen)) continue;
+        grant_rights[i] = flags;
+        long dest = -1;
+        if (record >= 0 && carry.records < 16) {
+            dest = static_cast<long>(3 + how->grant_count + carry.records);
+            carry.record_src[carry.records++] = record;
+        }
+        char entry[64];
+        char* o = entry;
+        *o++ = ';'; o = put_decimal(o, i);
+        *o++ = ','; o = put_decimal(o, flags);
+        *o++ = ',';
+        if (dest < 0) { *o++ = '-'; *o++ = '1'; } else o = put_decimal(o, static_cast<okm_uptr>(dest));
+        *o++ = ','; o = put_decimal(o, plen);
+        *o++ = ',';
+        const okm_uptr head = static_cast<okm_uptr>(o - entry);
+        if (carry.rights_len + head + plen >= sizeof carry.rights) return kal_err_invalid;
+        okm::copy(carry.rights + carry.rights_len, entry, head); carry.rights_len += head;
+        okm::copy(carry.rights + carry.rights_len, prefix, plen); carry.rights_len += plen;
+        carry.any_rights = true;
+    }
+    {
+        const int own = okm::resource_preference();
+        const int asked = preference == KAL_SPAWN_RESOURCES_PERFORMANCE ? 1
+                        : preference == KAL_SPAWN_RESOURCES_ECONOMY ? 2
+                        : preference == KAL_SPAWN_RESOURCES_BALANCED ? 0 : own;
+        carry.resources = asked == 1 ? "performance" : asked == 2 ? "economy"
+                        : preference != 0 ? "balanced" : nullptr;
+    }
+
     vector args, envs;
     if (!args.build(argv, argv_lens, argc)) return kal_err_no_memory;
-    if (!envs.build_env(envp, envp_lens, envc, how->grants, how->grant_count))
+    if (!envs.build_env(envp, envp_lens, envc, how->grants, how->grant_count, carry))
         return kal_err_no_memory;
 
     // THE PROGRAM'S NAME IS MADE ABSOLUTE BEFORE THE DIRECTORY MOVES, because
@@ -727,6 +912,11 @@ int kal_process_spawn(const kal_spawn* how,
     if (n >= sizeof whole - 1) return kal_err_invalid;
     whole[n] = '\0';
 
+    // CONFINED (0.23): the rules are written here, before the duplication, and
+    // applied in the duplicate before it is replaced.
+    profile rules;
+    if (confine && !rules.build(granted, grant_rights, how->grant_count, whole)) return kal_err_invalid;
+
     const okm_long in = streams ? static_cast<okm_long>(streams->in.h)  : 0;
     const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;
     const okm_long er = streams ? static_cast<okm_long>(streams->err.h) : 0;
@@ -742,10 +932,16 @@ int kal_process_spawn(const kal_spawn* how,
     // then answers zero and this operation behaves as it did before 0.13,
     // which is the same fallback openkal-linux takes.
     exec_report report;
-    report.open(how->grant_count);
+    report.open(how->grant_count + carry.records);
 
+    // A CONFINED START DUPLICATES AS THIS SYSTEM'S `fork' DOES (space.cpp):
+    // the duplicate calls into this system's library to apply the rules, and the
+    // library's locks must be consistent there. Any other start calls nothing
+    // there, and duplicates without the protocol, as before.
     bool is_duplicate = false;
+    if (confine) okm::fork_prepare();
     const okm_long child = okm::duplicate(is_duplicate);
+    if (confine && !is_duplicate) okm::fork_parent();
     if (okm::failed(child)) { report.close_both(); return okm::translate(child); }
 
     // The duplicate is distinguished by the second value the call returns and
@@ -753,6 +949,7 @@ int kal_process_spawn(const kal_spawn* how,
     // reason, and what happens to an implementation that tests the first alone,
     // are in src/sys.h beside the call.
     if (is_duplicate) {
+        if (confine) okm::fork_child();
         // WHAT THE STARTED PROGRAM RECEIVES IS THE THREE STREAMS AND THE GRANTED
         // DIRECTORIES, AND NOTHING ELSE (SPEC.md clause 7.13).
         //
@@ -766,7 +963,7 @@ int kal_process_spawn(const kal_spawn* how,
         // different number clears it on the copy it places, including where the
         // source happened to be the position itself --- which `dup2' left
         // untouched, still marked to close, so that the grant never arrived.
-        const okm_long top = static_cast<okm_long>(3 + how->grant_count);
+        const okm_long top = static_cast<okm_long>(3 + how->grant_count + carry.records);
         auto lift = [&](okm_long fd) -> okm_long {
             const okm_long r = okm::sys(okm::nr_fcntl, fd, okm::f_dupfd_cloexec, top);
             if (okm::failed(r)) {
@@ -794,6 +991,8 @@ int kal_process_spawn(const kal_spawn* how,
         const okm_long sou = (how->flags & KAL_SPAWN_NULL_OUT) ? device : ou != 0 ? lift(ou) : 0;
         const okm_long ser = (how->flags & KAL_SPAWN_NULL_ERR) ? device : er != 0 ? lift(er) : 0;
         for (kal_uintptr i = 0; i < how->grant_count; ++i) granted[i] = lift(granted[i]);
+        okm_long records[16];
+        for (kal_uintptr j = 0; j < carry.records; ++j) records[j] = lift(carry.record_src[j]);
         const okm_long work = lift(w);
 
         if (sin != 0) okm::sys(okm::nr_dup2, sin, 0);
@@ -801,6 +1000,9 @@ int kal_process_spawn(const kal_spawn* how,
         if (ser != 0) okm::sys(okm::nr_dup2, ser, 2);
         for (kal_uintptr i = 0; i < how->grant_count; ++i)
             okm::sys(okm::nr_dup2, granted[i], static_cast<okm_long>(3 + i));
+        // The records of recorded grants, after the grants (0.23).
+        for (kal_uintptr j = 0; j < carry.records; ++j)
+            okm::sys(okm::nr_dup2, records[j], static_cast<okm_long>(3 + how->grant_count + j));
 
         // What the CALLER itself inherited without the flag is not a handle it
         // granted. A program that starts others inside a sandbox passes every
@@ -830,6 +1032,17 @@ int kal_process_spawn(const kal_spawn* how,
         if (okm::g_pipe_ignored_here) {
             struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } standard{};
             okm::sys(46 /* sigaction */, 13 /* SIGPIPE */, reinterpret_cast<okm_long>(&standard), 0);
+        }
+
+        // CONFINED: the rules, before the replacement; the sandbox stays across
+        // it. A confinement that could not be made is a start that failed.
+        if (confine) {
+            char* error = nullptr;
+            if (sandbox_init_with_parameters(rules.text, 0, nullptr, &error) != 0) {
+                report.say(-okm::e_perm);
+                okm::sys(okm::nr_exit, 127);
+                for (;;) { }
+            }
         }
 
         const okm_long why = okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
@@ -1188,6 +1401,7 @@ kal_uintptr kal_process_props(void) { return
   | KAL_PROCESS_PROP_JOB | KAL_PROCESS_PROP_JOB_USAGE | KAL_PROCESS_PROP_JOB_LIMIT_SUPERVISED
   | KAL_PROCESS_PROP_OPEN_ID
   | KAL_PROCESS_PROP_NULL_STREAMS
+  | KAL_PROCESS_PROP_CONFINE
 #if defined(__aarch64__)
   // AND IT AGREES WITH `kal_process_stop_requested', WHICH IS A REQUIREMENT
   // AND NOT A COURTESY: the header defines null there as the absence this

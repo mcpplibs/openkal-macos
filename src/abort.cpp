@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "rights.h"
 #include <openkal/abort.h>
 
 extern "C" {
@@ -17,6 +18,9 @@ extern "C" {
 // executes after the call. This kernel's own call ends the program without
 // running anything, which is why it is the one used.
 [[noreturn]] void kal_exit(int code) {
+    // What the program's attenuated handles recorded is written, and ended
+    // (0.23, fs.h).
+    okm::rights::end_of_program();
     for (;;) okm::sys(okm::nr_exit, code);
 }
 

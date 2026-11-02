@@ -144,6 +144,13 @@ bool available() {
 
 }  // namespace
 
+// The kernel's protection of a range with its greatest protection, which this
+// system's library supplies and no C library in this ecosystem defines
+// (port/libSystem.tbd).
+extern "C" int mach_vm_protect(unsigned task, unsigned long long address, unsigned long long size,
+                               int set_maximum, int new_protection);
+extern "C" unsigned mach_task_self_;
+
 extern "C" {
 
 void* kal_exec_alloc(kal_uintptr size) {
@@ -205,6 +212,24 @@ int kal_exec_publish_part(void* region, kal_uintptr offset, kal_uintptr size) {
 }
 
 // The page this kernel protects in, which is also what it reserves in.
+// SEALED READ-ONLY (0.23), and for ever by lowering the part's greatest
+// protection (`mach_vm_protect' with set_maximum): this kernel then refuses to
+// make it writable or executable again, which `mprotect' reports as EACCES.
+int kal_exec_seal_part(void* region, kal_uintptr offset, kal_uintptr size, kal_uintptr flags) {
+    const okm_uptr g = granularity();
+    if (region == nullptr || size == 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
+        || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0 || (flags & ~KAL_EXEC_SEAL_FOREVER) != 0)
+        return kal_err_invalid;
+    const okm_long at = reinterpret_cast<okm_long>(static_cast<char*>(region) + offset);
+    const okm_long r = okm::sys(okm::nr_mprotect, at, static_cast<okm_long>(size), okm::prot_read);
+    if (okm::failed(r)) return okm::translate(r);
+    if (flags & KAL_EXEC_SEAL_FOREVER) {
+        if (mach_vm_protect(mach_task_self_, static_cast<unsigned long long>(at), size, 1, 1 /* VM_PROT_READ */) != 0)
+            return kal_err_permission;
+    }
+    return kal_ok;
+}
+
 kal_uintptr kal_exec_granularity(void) { return granularity(); }
 
 // A PART THAT IS A FILE'S (0.21): the file's pages mapped over the part,
@@ -218,7 +243,7 @@ int kal_exec_map_part(void* region, kal_uintptr offset, kal_uintptr size, kal_fi
     const int fd = okm::unpack(f.h);
     if (region == nullptr || size == 0 || fd < 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
         || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0 || at % KAL_MAP_ALIGNMENT != 0
-        || (how & ~KAL_EXEC_MAP_EXECUTE) != 0)
+        || (how & ~(KAL_EXEC_MAP_EXECUTE | KAL_EXEC_MAP_PREFETCH | KAL_EXEC_MAP_BTI)) != 0)
         return kal_err_invalid;
     okm::kstat64 st{};
     const okm_long s = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
@@ -237,6 +262,11 @@ int kal_exec_map_part(void* region, kal_uintptr offset, kal_uintptr size, kal_fi
         if (-r == okm::e_nodev || -r == okm::e_perm) return kal_err_not_supported;
         return okm::translate(r);
     }
+    // READ IN NOW (0.23): the kernel is told the part will be needed, and reads
+    // it ahead. This system has no branch-target enforcement for an ordinary
+    // program; KAL_EXEC_MAP_BTI maps as without it.
+    if (how & KAL_EXEC_MAP_PREFETCH)
+        okm::sys(okm::nr_madvise, r, static_cast<okm_long>(size), 3 /* MADV_WILLNEED */);
     return kal_ok;
 }
 
@@ -254,7 +284,8 @@ void kal_exec_free(void* p, kal_uintptr size) {
 // bytes reserves a second region and abandons the first, which is what the
 // header says a zero in that position means.
 kal_uintptr kal_exec_props(void) {
-    return available() ? KAL_EXEC_PROP_AVAILABLE | KAL_EXEC_PROP_FILE | KAL_EXEC_PROP_PLACE : 0;
+    return available() ? KAL_EXEC_PROP_AVAILABLE | KAL_EXEC_PROP_FILE | KAL_EXEC_PROP_PLACE
+                         | KAL_EXEC_PROP_SEAL_FOREVER : 0;
 }
 
 }  // extern "C"

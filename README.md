@@ -174,6 +174,27 @@ which this kernel honours where nothing is there, and releases a mapping placed
 elsewhere: `MAP_FIXED` would replace what is there. `KAL_EXEC_PROP_PLACE` is
 claimed where executable memory is available.
 
+**A part sealed, a part read in.** `kal_exec_seal_part` lowers the part's
+greatest protection with `mach_vm_protect` for `KAL_EXEC_SEAL_FOREVER`, which
+this kernel does not raise again; `KAL_EXEC_MAP_PREFETCH` is `MADV_WILLNEED`.
+
+**A handle with less** (`kal_fs_dir_attenuate`), with its record and the
+statement that nothing beneath changes: the table openkal-linux keeps, with the
+listing read by `getdirentries64` and a record reopened to append through the
+name `F_GETPATH` gives. **A listing with attributes**: `getattrlistbulk` returns
+a batch of entries with their kind, size, time and identity, and
+`KAL_FS_PROP_LIST_INFO` is claimed.
+
+**Confinement** (`KAL_SPAWN_CONFINE`): a sandbox profile written from the grants
+and their rights, applied with `sandbox_init_with_parameters` in the duplicate
+before it is replaced.
+
+**Observation.** A fault is reported on an alternate stack, naming each frame's
+file from `proc_pidinfo(PROC_PIDREGIONPATHINFO)` and its symbol from the file's
+Mach-O or ELF table. Samples are `ITIMER_PROF` and `SIGPROF`. `kal_process_info`
+reports faults from `getrusage` for this program and `PROC_PIDTASKINFO` for
+another; `kal_memory_info` is `hw.memsize` and `kern.memorystatus_level`.
+
 ## What 0.20 adds (openkal 0.22)
 
 **The null device at a position.** `KAL_SPAWN_NULL_IN`, `KAL_SPAWN_NULL_OUT` and

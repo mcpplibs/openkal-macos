@@ -74,6 +74,14 @@ void in_the_copy() {
 
 }  // namespace
 
+// THE SAME PROTOCOL FOR A CONFINED START (0.23, process.cpp), whose duplicate
+// calls into this system's library before it is replaced.
+namespace okm {
+void fork_prepare() { prepare(); }
+void fork_parent()  { in_the_original(); }
+void fork_child()   { in_the_copy(); }
+}  // namespace okm
+
 extern "C" {
 
 int kal_space_start(void (*entry)(void*), void* arg, void* stack_top,

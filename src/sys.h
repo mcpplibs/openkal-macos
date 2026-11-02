@@ -201,6 +201,11 @@ enum : okm_long {
     nr_ulock_wait = 515, nr_ulock_wake = 516,
     // openkal 0.20: transfers at an offset.
     nr_pread = 153, nr_pwrite = 154,
+    // openkal 0.23: a listing with its attributes, the processor-time timer
+    // samples are taken by, the stack a fault is reported on, and a program's
+    // page faults.
+    nr_getattrlistbulk = 461, nr_setitimer = 83, nr_sigaltstack = 53,
+    nr_getrusage = 117,
 
     // The socket calls, and the one that reports readiness.
     //
