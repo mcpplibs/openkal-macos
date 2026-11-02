@@ -66,9 +66,15 @@ struct profile {
             if (okm::failed(okm::sys(okm::nr_fcntl, grants[i], okm::f_getpath, reinterpret_cast<okm_long>(path)))) continue;
             ok = put(" (subpath ") && quoted(path) && put(")");
         }
+        // The system's own libraries are in its cryptex, a volume this
+        // system mounts at boot and reaches as /private/preboot as well as
+        // beneath /System: the loader of a program reads them there, and a
+        // program refused them is ended by it before its first instruction
+        // (measured: SIGABRT, termination namespace 35, on macOS 15).
         ok = ok && put(")))\n(deny file-read-data (require-not (require-any"
                        " (subpath \"/System\") (subpath \"/usr/lib\") (subpath \"/usr/share\")"
-                       " (subpath \"/private/var/db/dyld\") (subpath \"/Library/Apple\") (subpath \"/dev\")"
+                       " (subpath \"/private/var/db/dyld\") (subpath \"/private/preboot/Cryptexes\")"
+                       " (subpath \"/Library/Apple\") (subpath \"/dev\")"
                        " (literal ") && quoted(program) && put(")");
         for (kal_uintptr i = 0; ok && i < g; ++i) {
             if (okm::failed(okm::sys(okm::nr_fcntl, grants[i], okm::f_getpath, reinterpret_cast<okm_long>(path)))) continue;

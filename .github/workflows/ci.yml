@@ -255,7 +255,8 @@ jobs:
       - name: The sandbox's refusals and the reports of ended programs
         if: failure()
         run: |
-          log show --last 10m --style compact --predicate 'sender == "Sandbox" OR eventMessage CONTAINS "deny("' 2>/dev/null | tail -60 || true
+          log show --last 10m --style compact --predicate 'eventMessage CONTAINS "deny("' 2>/dev/null \
+            | grep -E 'openkal|conformance' | tail -80 || true
           for f in "$HOME"/Library/Logs/DiagnosticReports/*.ips; do
             [ -f "$f" ] || continue
             echo "--- $f"; head -c 6000 "$f"; echo
