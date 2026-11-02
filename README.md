@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.20.0"
+openkal = "0.21.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.18.0"
+openkal-macos = "0.19.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -166,6 +166,21 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.19 adds (openkal 0.21)
+
+**Instructions from a file.** `kal_exec_map_part` maps the file's pages over part
+of a region (`mmap` with `MAP_FIXED`, private), read, or read and executed;
+`KAL_EXEC_PROP_FILE` is claimed where executable memory is available.
+
+**An ended program's processor time.** `kal_process_info` reports `cpu_ns` of a
+started program that has ended from the record the kernel keeps until it is
+collected (`proc_pid_rusage`), as its peak memory.
+
+**A chunk of `kal_alloc` is carved as it is used.** A free list threaded through
+each 1 MiB chunk when it was mapped made the whole chunk resident. A block is
+now carved when it is handed out, and an alignment wider than 4096 bytes is
+mapped.
 
 ## What 0.18 adds (openkal 0.20)
 

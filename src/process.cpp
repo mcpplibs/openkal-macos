@@ -626,8 +626,13 @@ int kal_process_info(kal_process p, kal_u32 wanted, kal_program_info* out) {
         v.started_ns = b.start_sec * 1000000000ull + b.start_usec * 1000ull;
         v.present |= KAL_PINFO_STARTED;
     }
+    // CPU (0.21): of a started program that has ended, from the record the
+    // kernel keeps until it is collected, as its peak memory below.
     okm_u64 c = 0;
-    if (!ended && (wanted & KAL_PINFO_CPU) && cpu_ns(pid, c)) { v.cpu_ns = c; v.present |= KAL_PINFO_CPU; }
+    if ((wanted & KAL_PINFO_CPU) && (!ended || handle_kind(p) == kind_child) && cpu_ns(pid, c)) {
+        v.cpu_ns = c;
+        v.present |= KAL_PINFO_CPU;
+    }
     // MEMORY (openkal 0.20): the footprint now and at most; of a started
     // program that has ended, the peak from the record the kernel keeps until it
     // is collected. Only where the structure has room for the fields.
