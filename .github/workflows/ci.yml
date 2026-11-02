@@ -249,6 +249,18 @@ jobs:
           test "$missing" -eq 0
           done
 
+      # WHAT THIS SYSTEM'S SANDBOX REFUSED, AND WHAT IT ENDED, when a test
+      # failed: a confined program's refusals are the system's log's, and a
+      # program it ended leaves a report; neither reaches the test's output.
+      - name: The sandbox's refusals and the reports of ended programs
+        if: failure()
+        run: |
+          log show --last 10m --style compact --predicate 'sender == "Sandbox" OR eventMessage CONTAINS "deny("' 2>/dev/null | tail -60 || true
+          for f in "$HOME"/Library/Logs/DiagnosticReports/*.ips; do
+            [ -f "$f" ] || continue
+            echo "--- $f"; head -c 6000 "$f"; echo
+          done
+
       # The other architecture, as far as this system allows it to be reached.
       #
       # The system-call numbers agree between the two --- measured, in the
