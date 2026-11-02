@@ -810,7 +810,13 @@ int kal_fs_list_next(kal_dir d, kal_uintptr* iter,
 // it is ordinarily installed on. A program that creates two names differing
 // only in case succeeds on the Linux implementation and not on this one, and
 // the position reports it in advance, which no operation could.
-kal_uintptr kal_fs_props(kal_dir d) { return volume_props(okm::unpack(d.h)); }
+// A name with every link followed is answered on every volume (0.23): the
+// kernel names an open descriptor (F_GETPATH) whatever holds it.
+kal_uintptr kal_fs_props(kal_dir d) {
+    const int fd = okm::unpack(d.h);
+    if (fd < 0) return 0;
+    return volume_props(fd) | KAL_FS_PROP_RESOLVED_NAME;
+}
 
 }  // extern "C" (reopened below)
 
@@ -836,6 +842,29 @@ int kal_fs_link_create(kal_dir base, const char* name, kal_uintptr len,
     const okm_long r = okm::sys(okm::nr_symlinkat, reinterpret_cast<okm_long>(tgt.buf),
                                 b, reinterpret_cast<okm_long>(n.buf));
     return okm::failed(r) ? okm::translate(r) : kal_ok;
+}
+
+// THE NAME WITH EVERY LINK FOLLOWED (0.23): the node opened for events only
+// (O_EVTONLY, which needs no permission to read it and follows every link), and
+// the kernel's name for that descriptor taken (F_GETPATH), as this system's own
+// C library answers `realpath' of an open file.
+kal_intptr kal_fs_resolved_name(kal_dir base, const char* name, kal_uintptr len,
+                                char* out, kal_uintptr cap) {
+    const int b = okm::unpack(base.h);
+    if (b < 0 || !okm::acceptable(name, len)) return -kal_err_invalid;
+    okm::terminated t(name, len); if (!t.ok) return -kal_err_invalid;
+    const okm_long fd = okm::sys(okm::nr_openat, b, reinterpret_cast<okm_long>(t.buf),
+                                 0x8000 /* O_EVTONLY */ | okm::o_cloexec, 0);
+    if (okm::failed(fd)) return -okm::translate(fd);
+    char own[okm::max_name + 1] = {};
+    const okm_long r = okm::sys(okm::nr_fcntl, fd, okm::f_getpath, reinterpret_cast<okm_long>(own));
+    okm::sys(okm::nr_close, fd);
+    if (okm::failed(r)) return -okm::translate(r);
+    okm_uptr n = 0;
+    while (n < sizeof own && own[n]) ++n;
+    if (out != nullptr)
+        for (okm_uptr i = 0; i < n && i < cap; ++i) out[i] = own[i];
+    return static_cast<kal_intptr>(n);
 }
 
 kal_intptr kal_fs_link_read(kal_dir base, const char* name, kal_uintptr len,

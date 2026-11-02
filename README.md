@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.22.0"
+openkal = "0.23.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.20.0"
+openkal-macos = "0.21.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -166,6 +166,13 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.21 adds (openkal 0.23)
+
+**A region at an address.** `kal_exec_alloc_at` passes the address as a hint,
+which this kernel honours where nothing is there, and releases a mapping placed
+elsewhere: `MAP_FIXED` would replace what is there. `KAL_EXEC_PROP_PLACE` is
+claimed where executable memory is available.
 
 ## What 0.20 adds (openkal 0.22)
 

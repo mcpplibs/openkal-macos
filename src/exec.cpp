@@ -161,6 +161,26 @@ void* kal_exec_alloc(kal_uintptr size) {
     return reinterpret_cast<void*>(r);
 }
 
+// AT AN ADDRESS (0.23): the address as a hint, which this kernel honours where
+// nothing is there, and the answer compared. A mapping placed elsewhere is
+// released: MAP_FIXED would replace what is there, which is the one thing a
+// reservation at an address must not do.
+void* kal_exec_alloc_at(void* at, kal_uintptr size) {
+    const okm_uptr where = reinterpret_cast<okm_uptr>(at);
+    if (size == 0 || where == 0 || (where & (granularity() - 1)) != 0) return nullptr;
+    if (!available()) return nullptr;
+    const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
+    const okm_long r = okm::sys(okm::nr_mmap, static_cast<okm_long>(where), static_cast<okm_long>(bytes),
+                                okm::prot_read | okm::prot_write,
+                                okm::map_private | okm::map_anon, -1, 0);
+    if (okm::failed(r)) return nullptr;
+    if (static_cast<okm_uptr>(r) != where) {
+        okm::sys(okm::nr_munmap, r, static_cast<okm_long>(bytes));
+        return nullptr;
+    }
+    return at;
+}
+
 int kal_exec_publish(void* p, kal_uintptr size) {
     if (p == nullptr || size == 0) return kal_err_invalid;
     const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
@@ -234,7 +254,7 @@ void kal_exec_free(void* p, kal_uintptr size) {
 // bytes reserves a second region and abandons the first, which is what the
 // header says a zero in that position means.
 kal_uintptr kal_exec_props(void) {
-    return available() ? KAL_EXEC_PROP_AVAILABLE | KAL_EXEC_PROP_FILE : 0;
+    return available() ? KAL_EXEC_PROP_AVAILABLE | KAL_EXEC_PROP_FILE | KAL_EXEC_PROP_PLACE : 0;
 }
 
 }  // extern "C"
