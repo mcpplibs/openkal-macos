@@ -1,5 +1,7 @@
 #include "sys.h"
+#include "handle.h"
 #include <openkal/exec.h>
+#include <openkal/map.h>
 #include <openkal/memory.h>
 
 // openkal.exec on this system.
@@ -185,6 +187,39 @@ int kal_exec_publish_part(void* region, kal_uintptr offset, kal_uintptr size) {
 // The page this kernel protects in, which is also what it reserves in.
 kal_uintptr kal_exec_granularity(void) { return granularity(); }
 
+// A PART THAT IS A FILE'S (0.21): the file's pages mapped over the part,
+// private, and executable where asked. MAP_FIXED replaces what the part held in
+// one call. The arguments are checked first: a refused part leaves the region
+// as it was.
+int kal_exec_map_part(void* region, kal_uintptr offset, kal_uintptr size, kal_file f, kal_u64 at,
+                      kal_uintptr how) {
+    if (!available()) return kal_err_not_supported;
+    const okm_uptr g = granularity();
+    const int fd = okm::unpack(f.h);
+    if (region == nullptr || size == 0 || fd < 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
+        || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0 || at % KAL_MAP_ALIGNMENT != 0
+        || (how & ~KAL_EXEC_MAP_EXECUTE) != 0)
+        return kal_err_invalid;
+    okm::kstat64 st{};
+    const okm_long s = okm::sys(okm::nr_fstat64, fd, reinterpret_cast<okm_long>(&st));
+    if (okm::failed(s)) return okm::translate(s);
+    if ((okm::stat_mode(st) & okm::s_ifmt) != okm::s_ifreg) return kal_err_not_supported;
+    const kal_u64 length = st.size > 0 ? static_cast<kal_u64>(st.size) : 0;
+    if (at > length || static_cast<kal_u64>(size) > length - at) return kal_err_invalid;
+    const okm_long prot = okm::prot_read | ((how & KAL_EXEC_MAP_EXECUTE) ? okm::prot_exec : 0);
+    const okm_long r = okm::sys(okm::nr_mmap,
+                                reinterpret_cast<okm_long>(static_cast<char*>(region) + offset),
+                                static_cast<okm_long>(size), prot, okm::map_private | okm::map_fixed, fd,
+                                static_cast<okm_long>(at));
+    if (okm::failed(r)) {
+        // ENODEV: the file system does not map. EPERM: its files are not
+        // executed (a volume mounted noexec). The resource refuses (exec.h).
+        if (-r == okm::e_nodev || -r == okm::e_perm) return kal_err_not_supported;
+        return okm::translate(r);
+    }
+    return kal_ok;
+}
+
 void kal_exec_free(void* p, kal_uintptr size) {
     if (p == nullptr || size == 0) return;
     const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
@@ -199,7 +234,7 @@ void kal_exec_free(void* p, kal_uintptr size) {
 // bytes reserves a second region and abandons the first, which is what the
 // header says a zero in that position means.
 kal_uintptr kal_exec_props(void) {
-    return available() ? KAL_EXEC_PROP_AVAILABLE : 0;
+    return available() ? KAL_EXEC_PROP_AVAILABLE | KAL_EXEC_PROP_FILE : 0;
 }
 
 }  // extern "C"

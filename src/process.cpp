@@ -626,8 +626,13 @@ int kal_process_info(kal_process p, kal_u32 wanted, kal_program_info* out) {
         v.started_ns = b.start_sec * 1000000000ull + b.start_usec * 1000ull;
         v.present |= KAL_PINFO_STARTED;
     }
+    // CPU (0.21): of a started program that has ended, from the record the
+    // kernel keeps until it is collected, as its peak memory below.
     okm_u64 c = 0;
-    if (!ended && (wanted & KAL_PINFO_CPU) && cpu_ns(pid, c)) { v.cpu_ns = c; v.present |= KAL_PINFO_CPU; }
+    if ((wanted & KAL_PINFO_CPU) && (!ended || handle_kind(p) == kind_child) && cpu_ns(pid, c)) {
+        v.cpu_ns = c;
+        v.present |= KAL_PINFO_CPU;
+    }
     // MEMORY (openkal 0.20): the footprint now and at most; of a started
     // program that has ended, the peak from the record the kernel keeps until it
     // is collected. Only where the structure has room for the fields.
@@ -644,6 +649,207 @@ int kal_process_info(kal_process p, kal_u32 wanted, kal_program_info* out) {
     okm::copy(reinterpret_cast<char*>(out), reinterpret_cast<const char*>(&v), n);
     return kal_ok;
 }
+
+namespace {
+
+// THE TRANSFER TO A FUNCTION ON A STACK OF ITS OWN, IN A STARTED IMAGE THAT
+// SHARES THIS PROGRAM'S MEMORY (vfork). The image leaves this program's stack at
+// once, before it writes anything, so the frames this context returns through
+// are as it left them; the callee-saved registers carry the function, the stack
+// and the argument across the call. The image ends with the function's value
+// as its status if it returns. The original receives the image's identifier,
+// or a negated error.
+#if defined(__x86_64__)
+asm(".globl _okm_vfork_start\n"
+    ".private_extern _okm_vfork_start\n"
+    "_okm_vfork_start:\n"          // rdi = fn, rsi = stack, rdx = arg
+    "  push %rbx\n"
+    "  push %r12\n"
+    "  push %r13\n"
+    "  mov %rdi, %rbx\n"
+    "  mov %rsi, %r12\n"
+    "  mov %rdx, %r13\n"
+    "  mov $0x2000042, %eax\n"      // vfork
+    "  syscall\n"
+    "  jc 2f\n"
+    "  test %edx, %edx\n"           // the second value: one in the image
+    "  jz 1f\n"
+    "  mov %r12, %rsp\n"
+    "  xor %ebp, %ebp\n"
+    "  mov %r13, %rdi\n"
+    "  call *%rbx\n"
+    "  mov %eax, %edi\n"
+    "  mov $0x2000001, %eax\n"      // exit
+    "  syscall\n"
+    "  hlt\n"
+    "2:\n"
+    "  neg %rax\n"
+    "1:\n"
+    "  pop %r13\n"
+    "  pop %r12\n"
+    "  pop %rbx\n"
+    "  ret\n");
+#elif defined(__aarch64__)
+asm(".globl _okm_vfork_start\n"
+    ".private_extern _okm_vfork_start\n"
+    ".p2align 2\n"
+    "_okm_vfork_start:\n"          // x0 = fn, x1 = stack, x2 = arg
+    "  stp x29, x30, [sp, #-48]!\n"
+    "  stp x19, x20, [sp, #16]\n"
+    "  str x21, [sp, #32]\n"
+    "  mov x19, x0\n"
+    "  mov x20, x1\n"
+    "  mov x21, x2\n"
+    "  mov x16, #66\n"              // vfork
+    "  svc #0x80\n"
+    "  b.cs 2f\n"
+    "  cbz x1, 1f\n"                // the second value: one in the image
+    "  mov sp, x20\n"
+    "  mov x29, #0\n"
+    "  mov x0, x21\n"
+    "  blr x19\n"
+    "  mov x16, #1\n"               // exit
+    "  svc #0x80\n"
+    "  brk #1\n"
+    "2:\n"
+    "  neg x0, x0\n"
+    "1:\n"
+    "  ldr x21, [sp, #32]\n"
+    "  ldp x19, x20, [sp, #16]\n"
+    "  ldp x29, x30, [sp], #48\n"
+    "  ret\n");
+#endif
+extern "C" okm_long okm_vfork_start(int (*fn)(void*), void* stack, void* arg);
+
+// WHAT THE STARTED IMAGE IS GIVEN, prepared before it exists. It runs in this
+// program's memory until it is replaced, so it reads this and writes nothing of
+// this program's but the digits of its own number in its own environment,
+// which this program releases unread; the descriptors it moves are its own
+// copies.
+struct start_plan {
+    const kal_spawn*    how;
+    const okm_long*     granted;
+    int                 w;
+    okm_long            in, ou, er;
+    const vector*       args;
+    const vector*       envs;
+    const exec_report*  report;
+    const char*         whole;
+    bool                unit;
+    okm_long            join;
+    const unsigned int* mask;
+};
+
+constexpr okm_uptr kStartStack = 64 * 1024;
+
+// THE STARTED IMAGE, until it is replaced: on its own stack, in this program's
+// memory, with every request held (kal_process_spawn).
+int start_image(void* arg) {
+    const start_plan& plan = *static_cast<const start_plan*>(arg);
+    const kal_spawn* const how = plan.how;
+    const exec_report& report = *plan.report;
+    const vector& args = *plan.args;
+    const vector& envs = *plan.envs;
+    const int w = plan.w;
+    const okm_long in = plan.in, ou = plan.ou, er = plan.er, join = plan.join;
+    const bool unit = plan.unit;
+    const char* const whole = plan.whole;
+    okm_long granted[16];
+    for (kal_uintptr i = 0; i < how->grant_count; ++i) granted[i] = plan.granted[i];
+
+    // A HANDLER OF THE CALLER'S IS NOT ENTERED HERE: each request it handles
+    // is given its default until the replacement, which gives every handled
+    // request its default in any case. One it ignores stays ignored, as the
+    // replacement keeps it.
+    for (int signo = 1; signo < 32; ++signo) {
+        if (signo == 9 || signo == 17) continue;   // SIGKILL, SIGSTOP
+        struct { void (*handler)(int); unsigned int mask; int flags; } old{};
+        if (okm::failed(okm::sys(46 /* sigaction */, signo, 0, reinterpret_cast<okm_long>(&old)))) continue;
+        if (old.handler == nullptr || old.handler == reinterpret_cast<void (*)(int)>(1)) continue;
+        struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } standard{};
+        okm::sys(46 /* sigaction */, signo, reinterpret_cast<okm_long>(&standard), 0);
+    }
+
+    // WHAT THE STARTED PROGRAM RECEIVES IS THE THREE STREAMS AND THE GRANTED
+    // DIRECTORIES, AND NOTHING ELSE (SPEC.md clause 7.13).
+    //
+    // Every source is first moved above the positions being filled, because
+    // placing one source on its position must not overwrite another that
+    // still has to be read: a granted directory, a stream or the working
+    // directory may each occupy a number between 0 and 3+n. Placing them one
+    // at a time where they stood let one grant arrive as a copy of another,
+    // and let a placement overwrite the directory the program was to run
+    // in. A source that is moved has its own descriptor flag; `dup2' onto a
+    // different number clears it on the copy it places, including where the
+    // source happened to be the position itself --- which `dup2' left
+    // untouched, still marked to close, so that the grant never arrived.
+    const okm_long top = static_cast<okm_long>(3 + how->grant_count);
+    auto lift = [&](okm_long fd) -> okm_long {
+        const okm_long r = okm::sys(okm::nr_fcntl, fd, okm::f_dupfd_cloexec, top);
+        if (okm::failed(r)) {
+            report.say(r);
+            okm::sys(okm::nr_exit, 127);
+            for (;;) { }
+        }
+        return r;
+    };
+    const okm_long sin = in != 0 ? lift(in) : 0;
+    const okm_long sou = ou != 0 ? lift(ou) : 0;
+    const okm_long ser = er != 0 ? lift(er) : 0;
+    for (kal_uintptr i = 0; i < how->grant_count; ++i) granted[i] = lift(granted[i]);
+    const okm_long work = lift(w);
+
+    if (sin != 0) okm::sys(okm::nr_dup2, sin, 0);
+    if (sou != 0) okm::sys(okm::nr_dup2, sou, 1);
+    if (ser != 0) okm::sys(okm::nr_dup2, ser, 2);
+    for (kal_uintptr i = 0; i < how->grant_count; ++i)
+        okm::sys(okm::nr_dup2, granted[i], static_cast<okm_long>(3 + i));
+
+    // What the CALLER itself inherited without the flag is not a handle it
+    // granted. A program that starts others inside a sandbox passes every
+    // descriptor it holds to them, and one of those reaching beyond the
+    // sandbox is exactly what the sandbox was for.
+    close_on_exec_from(top);
+
+    envs.stamp(okm::sys(okm::nr_getpid));
+
+    // The directory the program RUNS in --- `whole' already carries where it
+    // is named from, so this no longer has to serve both.
+    //
+    // A FAILURE HERE MUST NOT REACH `execve'. Running the right program in
+    // the wrong directory is the silent wrongness this pipe exists to
+    // remove, so it is reported through the same channel an exec failure
+    // uses.
+    if (const okm_long e = okm::sys(nr_fchdir, work); okm::failed(e)) {
+        report.say(e);
+        okm::sys(okm::nr_exit, 127);
+        for (;;) { }
+    }
+
+    if (unit) okm::sys(nr_setpgid, 0, join);
+
+    // SIGPIPE AS THIS PROGRAM WAS STARTED WITH, not as this implementation
+    // set it for its own writes (env.cpp): an ignore would outlive `execve'.
+    if (okm::g_pipe_ignored_here) {
+        struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } standard{};
+        okm::sys(46 /* sigaction */, 13 /* SIGPIPE */, reinterpret_cast<okm_long>(&standard), 0);
+    }
+
+    // The caller's mask, which the program is started with, once nothing of
+    // the caller's can be entered here any more (above).
+    okm::sys(48 /* sigprocmask */, 3 /* SIG_SETMASK */, reinterpret_cast<okm_long>(plan.mask), 0);
+
+    const okm_long why = okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
+                                  reinterpret_cast<okm_long>(args.slots),
+                                  reinterpret_cast<okm_long>(envs.slots));
+    // Reached only when the replacement did not happen, because when it
+    // does there is nothing here to reach.
+    report.say(why);
+    okm::sys(okm::nr_exit, 127);
+    for (;;) { }
+}
+
+}  // namespace
 
 int kal_process_spawn(const kal_spawn* how,
                       const char* path, kal_uintptr path_len,
@@ -731,89 +937,32 @@ int kal_process_spawn(const kal_spawn* how,
     exec_report report;
     report.open(how->grant_count);
 
-    bool is_duplicate = false;
-    const okm_long child = okm::duplicate(is_duplicate);
+    // THE STARTED IMAGE SHARES THIS PROGRAM'S MEMORY UNTIL IT IS REPLACED
+    // (vfork), on a stack of its own (okm_vfork_start), and this context waits
+    // for the replacement, as this system's `posix_spawn' starts a program
+    // without copying the caller. A duplicate (fork, until 0.19) copied the
+    // address space of the whole program for each start, which a language
+    // server that starts a worker for each module it builds paid 176 times.
+    //
+    // Every request is held until the image is replaced. A handler of this
+    // program run in the image would run in this program's memory; so the image
+    // sets every handler to the default first, and only then takes the mask the
+    // caller had (start_image).
+    unsigned int every = ~0u, caller_mask = 0;
+    okm::sys(48 /* sigprocmask */, 3 /* SIG_SETMASK */, reinterpret_cast<okm_long>(&every),
+             reinterpret_cast<okm_long>(&caller_mask));
+    const start_plan plan{ how, granted, w, in, ou, er, &args, &envs, &report, whole, unit, join,
+                           &caller_mask };
+    const okm_long stack = okm::sys(okm::nr_mmap, 0, static_cast<okm_long>(kStartStack),
+                                    okm::prot_read | okm::prot_write, okm::map_private | okm::map_anon,
+                                    -1, 0);
+    const okm_long child = okm::failed(stack)
+        ? stack
+        : okm_vfork_start(&start_image, reinterpret_cast<char*>(stack) + kStartStack,
+                          const_cast<start_plan*>(&plan));
+    okm::sys(48 /* sigprocmask */, 3 /* SIG_SETMASK */, reinterpret_cast<okm_long>(&caller_mask), 0);
+    if (!okm::failed(stack)) okm::sys(okm::nr_munmap, stack, static_cast<okm_long>(kStartStack));
     if (okm::failed(child)) { report.close_both(); return okm::translate(child); }
-
-    // The duplicate is distinguished by the second value the call returns and
-    // not by the first: both images receive the same first value here. The
-    // reason, and what happens to an implementation that tests the first alone,
-    // are in src/sys.h beside the call.
-    if (is_duplicate) {
-        // WHAT THE STARTED PROGRAM RECEIVES IS THE THREE STREAMS AND THE GRANTED
-        // DIRECTORIES, AND NOTHING ELSE (SPEC.md clause 7.13).
-        //
-        // Every source is first moved above the positions being filled, because
-        // placing one source on its position must not overwrite another that
-        // still has to be read: a granted directory, a stream or the working
-        // directory may each occupy a number between 0 and 3+n. Placing them one
-        // at a time where they stood let one grant arrive as a copy of another,
-        // and let a placement overwrite the directory the program was to run
-        // in. A source that is moved has its own descriptor flag; `dup2' onto a
-        // different number clears it on the copy it places, including where the
-        // source happened to be the position itself --- which `dup2' left
-        // untouched, still marked to close, so that the grant never arrived.
-        const okm_long top = static_cast<okm_long>(3 + how->grant_count);
-        auto lift = [&](okm_long fd) -> okm_long {
-            const okm_long r = okm::sys(okm::nr_fcntl, fd, okm::f_dupfd_cloexec, top);
-            if (okm::failed(r)) {
-                report.say(r);
-                okm::sys(okm::nr_exit, 127);
-                for (;;) { }
-            }
-            return r;
-        };
-        const okm_long sin = in != 0 ? lift(in) : 0;
-        const okm_long sou = ou != 0 ? lift(ou) : 0;
-        const okm_long ser = er != 0 ? lift(er) : 0;
-        for (kal_uintptr i = 0; i < how->grant_count; ++i) granted[i] = lift(granted[i]);
-        const okm_long work = lift(w);
-
-        if (sin != 0) okm::sys(okm::nr_dup2, sin, 0);
-        if (sou != 0) okm::sys(okm::nr_dup2, sou, 1);
-        if (ser != 0) okm::sys(okm::nr_dup2, ser, 2);
-        for (kal_uintptr i = 0; i < how->grant_count; ++i)
-            okm::sys(okm::nr_dup2, granted[i], static_cast<okm_long>(3 + i));
-
-        // What the CALLER itself inherited without the flag is not a handle it
-        // granted. A program that starts others inside a sandbox passes every
-        // descriptor it holds to them, and one of those reaching beyond the
-        // sandbox is exactly what the sandbox was for.
-        close_on_exec_from(top);
-
-        envs.stamp(okm::sys(okm::nr_getpid));
-
-        // The directory the program RUNS in --- `whole' already carries where it
-        // is named from, so this no longer has to serve both.
-        //
-        // A FAILURE HERE MUST NOT REACH `execve'. Running the right program in
-        // the wrong directory is the silent wrongness this pipe exists to
-        // remove, so it is reported through the same channel an exec failure
-        // uses.
-        if (const okm_long e = okm::sys(nr_fchdir, work); okm::failed(e)) {
-            report.say(e);
-            okm::sys(okm::nr_exit, 127);
-            for (;;) { }
-        }
-
-        if (unit) okm::sys(nr_setpgid, 0, join);
-
-        // SIGPIPE AS THIS PROGRAM WAS STARTED WITH, not as this implementation
-        // set it for its own writes (env.cpp): an ignore would outlive `execve'.
-        if (okm::g_pipe_ignored_here) {
-            struct { void (*handler)(int); void* tramp; unsigned int mask; int flags; } standard{};
-            okm::sys(46 /* sigaction */, 13 /* SIGPIPE */, reinterpret_cast<okm_long>(&standard), 0);
-        }
-
-        const okm_long why = okm::sys(okm::nr_execve, reinterpret_cast<okm_long>(whole),
-                                      reinterpret_cast<okm_long>(args.slots),
-                                      reinterpret_cast<okm_long>(envs.slots));
-        // Reached only when the replacement did not happen, because when it
-        // does there is nothing here to reach.
-        report.say(why);
-        okm::sys(okm::nr_exit, 127);
-        for (;;) { }
-    }
 
     // A START THAT DID NOT HAPPEN IS REPORTED, AND BY ITS REASON. Version
     // 0.13. Before this the duplicate's own failure reached nobody: this image
