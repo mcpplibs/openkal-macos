@@ -257,6 +257,18 @@ jobs:
         run: |
           log show --last 10m --style compact --predicate 'eventMessage CONTAINS "deny("' 2>/dev/null \
             | grep -E 'openkal|conformance' | tail -80 || true
+          log show --last 10m --style compact --predicate 'process == "openkal_0_23" OR eventMessage CONTAINS[c] "ignition"' \
+            2>/dev/null | tail -60 || true
+          # The confinement's rule for reading, given a system program, and
+          # then with each of a few trees allowed beside it: which one a
+          # program of this system needs to start.
+          base='(subpath "/System") (subpath "/usr/lib") (subpath "/usr/share") (subpath "/private/var/db/dyld") (subpath "/private/preboot/Cryptexes") (subpath "/Library/Apple") (subpath "/dev") (literal "/bin/echo")'
+          for extra in '' '(subpath "/private/preboot")' '(subpath "/private/var")' '(subpath "/private/etc")' \
+                       '(subpath "/Library")' '(subpath "/usr")' '(subpath "/private")' '(subpath "/")'; do
+            p="(version 1)(allow default)(deny file-read-data (require-not (require-any $base $extra)))"
+            if out=$(sandbox-exec -p "$p" /bin/echo started 2>&1); then r=ok; else r="ended $?"; fi
+            echo "  with ${extra:-nothing beside}: $r $out"
+          done
           for f in "$HOME"/Library/Logs/DiagnosticReports/*.ips; do
             [ -f "$f" ] || continue
             echo "--- $f"; head -c 6000 "$f"; echo
