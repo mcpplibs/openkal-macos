@@ -177,13 +177,6 @@ of a region (`mmap` with `MAP_FIXED`, private), read, or read and executed;
 started program that has ended from the record the kernel keeps until it is
 collected (`proc_pid_rusage`), as its peak memory.
 
-**A program is started without copying this one.** `kal_process_spawn` starts the
-program with `vfork`, and the started image leaves this program's stack for one
-of its own before it writes anything (`okm_vfork_start`); every request is held
-until it is replaced, and the started image sets each handled request to its
-default before it takes the caller's mask. A duplicate (`fork`) copied the
-address space of the whole program for each start.
-
 **A chunk of `kal_alloc` is carved as it is used.** A free list threaded through
 each 1 MiB chunk when it was mapped made the whole chunk resident. A block is
 now carved when it is handed out, and an alignment wider than 4096 bytes is
