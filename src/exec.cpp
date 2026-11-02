@@ -135,6 +135,29 @@ int probe() {
 // file acquires no dependency upon the runtime --- the property the
 // independence check in this package exists to hold. Two contexts racing here
 // perform the probe twice and store the same answer.
+// Whether any part of [at, at + size) was sealed for ever: its greatest
+// protection, which this kernel reports for each region it holds
+// (PROC_PIDREGIONINFO, its second word), no longer allows writing.
+bool sealed_for_ever(const void* at, okm_uptr size) {
+    static okm_long self = 0;
+    if (self == 0) self = okm::sys(okm::nr_getpid);
+    const okm_uptr from = reinterpret_cast<okm_uptr>(at), to = from + size;
+    for (okm_uptr a = from; a < to;) {
+        alignas(8) unsigned char info[96] = {};
+        const okm_long r = okm::sys(okm::nr_proc_info, 2 /* PROC_INFO_CALL_PIDINFO */, self, 7 /* PROC_PIDREGIONINFO */,
+                                    static_cast<okm_long>(a), reinterpret_cast<okm_long>(info), sizeof info);
+        if (okm::failed(r) || r < static_cast<okm_long>(sizeof info)) return false;
+        okm_u32 most = 0; okm_u64 start = 0, length = 0;
+        okm::copy(&most, info + 4, 4);
+        okm::copy(&start, info + 80, 8);
+        okm::copy(&length, info + 88, 8);
+        if (length == 0 || start >= to) return false;
+        if (!(most & 2 /* VM_PROT_WRITE */) && start + length > from) return true;
+        a = start + length;
+    }
+    return false;
+}
+
 bool available() {
     static int cached = 0;
     int v = __atomic_load_n(&cached, __ATOMIC_RELAXED);
@@ -205,6 +228,7 @@ int kal_exec_publish_part(void* region, kal_uintptr offset, kal_uintptr size) {
     if (region == nullptr || size == 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
         || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0)
         return kal_err_invalid;
+    if (sealed_for_ever(static_cast<char*>(region) + offset, size)) return kal_err_permission;
     const okm_long r = okm::sys(okm::nr_mprotect,
                                 reinterpret_cast<okm_long>(static_cast<char*>(region) + offset),
                                 static_cast<okm_long>(size), okm::prot_read | okm::prot_exec);
@@ -214,12 +238,15 @@ int kal_exec_publish_part(void* region, kal_uintptr offset, kal_uintptr size) {
 // The page this kernel protects in, which is also what it reserves in.
 // SEALED READ-ONLY (0.23), and for ever by lowering the part's greatest
 // protection (`mach_vm_protect' with set_maximum): this kernel then refuses to
-// make it writable or executable again, which `mprotect' reports as EACCES.
+// make it writable or executable again, which `mprotect' reports as EACCES. A
+// part sealed for ever is not sealed again, nor published, nor released: its
+// greatest protection is what says so (sealed_for_ever).
 int kal_exec_seal_part(void* region, kal_uintptr offset, kal_uintptr size, kal_uintptr flags) {
     const okm_uptr g = granularity();
     if (region == nullptr || size == 0 || (offset & (g - 1)) != 0 || (size & (g - 1)) != 0
         || (reinterpret_cast<okm_uptr>(region) & (g - 1)) != 0 || (flags & ~KAL_EXEC_SEAL_FOREVER) != 0)
         return kal_err_invalid;
+    if (sealed_for_ever(static_cast<char*>(region) + offset, size)) return kal_err_permission;
     const okm_long at = reinterpret_cast<okm_long>(static_cast<char*>(region) + offset);
     const okm_long r = okm::sys(okm::nr_mprotect, at, static_cast<okm_long>(size), okm::prot_read);
     if (okm::failed(r)) return okm::translate(r);
@@ -276,6 +303,8 @@ int kal_exec_map_part(void* region, kal_uintptr offset, kal_uintptr size, kal_fi
 
 void kal_exec_free(void* p, kal_uintptr size) {
     if (p == nullptr || size == 0) return;
+    // A region with a part sealed for ever remains for the program's life.
+    if (sealed_for_ever(p, round_up(static_cast<okm_uptr>(size), granularity()))) return;
     const okm_uptr bytes = round_up(static_cast<okm_uptr>(size), granularity());
     okm::sys(okm::nr_munmap, reinterpret_cast<okm_long>(p),
              static_cast<okm_long>(bytes));
