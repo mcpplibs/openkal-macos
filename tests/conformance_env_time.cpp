@@ -1,8 +1,16 @@
 // Conformance: openkal.env and openkal.time.
+//
+// `_NSGetExecutablePath' and `realpath' are the system's own, declared without
+// its headers as tests/conformance_spawn.cpp declares them: this test starts
+// itself again by its name.
 import openkal.env;
 import openkal.time;
 import openkal.stream;
 import openkal.process;
+import openkal.fs;
+
+extern "C" int   _NSGetExecutablePath(char* buf, unsigned* size);
+extern "C" char* realpath(const char* path, char* resolved);
 
 namespace {
 int failures = 0;
@@ -18,6 +26,7 @@ kal_u64 processor_ns() {
     kal_process_close(me);
     return ok ? info.cpu_ns : ~0ull;
 }
+
 void check(bool ok, const char* what) {
     if (ok) return;
     ++failures;
@@ -27,9 +36,41 @@ void check(bool ok, const char* what) {
     kal::write(kal::err(), what, n);
     kal::write(kal::err(), "\n", 1);
 }
+
+bool is(const char* a, const char* b) {
+    while (*a && *a == *b) { ++a; ++b; }
+    return *a == *b;
 }
 
-int main() {
+// The granularity another start of this program states, or -1.
+kal_duration granularity_elsewhere() {
+    char raw[1024], self[1024]; unsigned size = sizeof raw;
+    if (_NSGetExecutablePath(raw, &size) != 0 || realpath(raw, self) == nullptr) return ~0ull;
+    kal_dir root{};
+    for (kal_uintptr i = 0; i < kal_fs_preopen_count(); ++i) {
+        kal_dir d{}; char n[8]; kal_uintptr l = 0;
+        if (kal_fs_preopen(i, &d, n, sizeof n, &l) == kal_ok && l == 1 && n[0] == '/') root = d;
+    }
+    const char* argv[2] = { "conformance_env_time", "--granularity" };
+    const kal_uintptr lens[2] = { 20, 13 };
+    const kal_spawn how{ root, kal::fs::working(), nullptr, nullptr, 0, 0 };
+    kal_process p{};
+    kal_uintptr n = 0; while (self[1 + n]) ++n;
+    if (kal_process_spawn(&how, self + 1, n, argv, lens, 2, nullptr, nullptr, 0, nullptr, &p) != kal_ok)
+        return ~0ull;
+    int status = -1, terminated = -1;
+    kal_process_wait(p, &status, &terminated);
+    kal_process_close(p);
+    return terminated == 0 && status >= 0 ? static_cast<kal_duration>(status) : ~0ull;
+}
+}
+
+int main(int argc, char** argv) {
+    // The other start of granularity_elsewhere: its granularity as its status.
+    if (argc > 1 && is(argv[1], "--granularity")) {
+        const kal_duration g = kal::time::granularity();
+        return g < 250 ? static_cast<int>(g) : 250;
+    }
     // A program always receives the name it was started with, even where the
     // environment has none, in which case it is empty rather than absent.
     check(kal::env::arg_count() >= 1, "at least the program name is present");
@@ -65,6 +106,12 @@ int main() {
     const kal_u64 c1 = processor_ns();
     check(c0 != ~0ull && c1 != ~0ull && c1 - c0 < 50 * 1000 * 1000,
           "200 ms asleep is under 50 ms of processor time");
+
+    // THE GRANULARITY IS THE MACHINE'S, NOT A START'S (0.21.2): another start
+    // of this program states the same. A loader that keeps what a program's
+    // initialisers computed compares it among the implementation's facts.
+    check(granularity_elsewhere() == kal::time::granularity(),
+          "another start states the same granularity");
 
     // The wall source is claimed by this implementation, so it must report a
     // time after the specification was written rather than zero.

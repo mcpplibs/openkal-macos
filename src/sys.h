@@ -477,6 +477,23 @@ inline void relax() {
 #endif
 }
 
+// The ratio of the kernel's ticks to nanoseconds (`mach_timebase_info', a Mach
+// trap): 125/3 on the processors this system now runs on, 1/1 on the earlier
+// ones. The kernel reports processor time in these ticks, and the monotonic
+// source advances by one of them.
+inline void timebase(okm_u32& numer, okm_u32& denom) {
+    struct { okm_u32 numer, denom; } tb{1, 1};
+#if defined(__aarch64__)
+    register okm_long x0 __asm__("x0") = reinterpret_cast<okm_long>(&tb);
+    register okm_long x16 __asm__("x16") = -89;
+    __asm__ __volatile__("svc #0x80" : "+r"(x0) : "r"(x16) : "memory", "cc", "x1");
+#else
+    okm_long r;
+    __asm__ __volatile__("syscall" : "=a"(r) : "a"(0x1000000 + 89), "D"(&tb) : "rcx", "r11", "memory");
+#endif
+    numer = tb.numer ? tb.numer : 1; denom = tb.denom ? tb.denom : 1;
+}
+
 // The identity of the calling context.
 //
 // Version 0.3 read it from the register each architecture reserves for the

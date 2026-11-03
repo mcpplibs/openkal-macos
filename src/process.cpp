@@ -488,22 +488,6 @@ okm_u32 start_mark(const bsdinfo& b) {
     return static_cast<okm_u32>((us ^ (us >> 24) ^ (us >> 48)) & 0xffffffu);
 }
 
-// The kernel reports processor time in its own ticks, and this is the ratio to
-// nanoseconds (`mach_timebase_info', a Mach trap): 125/3 on the processors this
-// system now runs on, 1/1 on the earlier ones.
-void timebase(okm_u32& numer, okm_u32& denom) {
-    struct { okm_u32 numer, denom; } tb{1, 1};
-#if defined(__aarch64__)
-    register okm_long x0 __asm__("x0") = reinterpret_cast<okm_long>(&tb);
-    register okm_long x16 __asm__("x16") = -89;
-    __asm__ __volatile__("svc #0x80" : "+r"(x0) : "r"(x16) : "memory", "cc", "x1");
-#else
-    okm_long r;
-    __asm__ __volatile__("syscall" : "=a"(r) : "a"(0x1000000 + 89), "D"(&tb) : "rcx", "r11", "memory");
-#endif
-    numer = tb.numer ? tb.numer : 1; denom = tb.denom ? tb.denom : 1;
-}
-
 bool cpu_ns(okm_long pid, okm_u64& out) {
     alignas(8) unsigned char ri[400] = {};       // rusage_info_v0 and some
     const okm_long r = okm::sys(okm::nr_proc_info, 9 /* PROC_INFO_CALL_PIDRUSAGE */, pid,
@@ -513,7 +497,7 @@ bool cpu_ns(okm_long pid, okm_u64& out) {
     okm::copy(reinterpret_cast<char*>(&user), reinterpret_cast<const char*>(ri + 16), 8);
     okm::copy(reinterpret_cast<char*>(&sys), reinterpret_cast<const char*>(ri + 24), 8);
     okm_u32 n = 1, d = 1;
-    timebase(n, d);
+    okm::timebase(n, d);
     out = (user + sys) / d * n + (user + sys) % d * n / d;
     return true;
 }
