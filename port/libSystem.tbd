@@ -53,6 +53,11 @@ current-version: 1351.0.0
 # rule admits them: this system's library defines them, and no C library in
 # this ecosystem does.
 #
+# THREE MORE IN 0.21.3: the loader's record of the arguments and the
+# environment (`_NSGetArgc', `_NSGetArgv', `_NSGetEnviron'), for a question an
+# initialiser linked ahead of this package asks before this package's own
+# initialiser has recorded them (src/env.cpp). The same rule admits them.
+#
 # `dyld_stub_binder' is not called by anything here or in any source: it is
 # referenced by the LINKER, for the lazy binding it emits, and it is therefore a
 # requirement of the object format rather than of this package.
@@ -73,5 +78,6 @@ exports:
                    _pthread_get_stackaddr_np, _pthread_get_stacksize_np,
                    _pthread_set_qos_class_self_np, _pthread_threadid_np,
                    __pthread_self, dyld_stub_binder,
-                   _mach_task_self_, _mach_vm_protect, _sandbox_init_with_parameters ]
+                   _mach_task_self_, _mach_vm_protect, _sandbox_init_with_parameters,
+                   __NSGetArgc, __NSGetArgv, __NSGetEnviron ]
 ...

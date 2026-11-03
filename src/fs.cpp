@@ -4,7 +4,7 @@
 #include <openkal/fs.h>
 #include <openkal/memory.h>
 
-namespace okm { extern char** g_envp; }
+namespace okm { extern char** g_envp; void ensure_recorded(); }
 
 namespace {
 
@@ -63,6 +63,7 @@ constexpr kal_uintptr kMaxGrants = 16;
 void adopt_rights(const preopen* t, kal_uintptr count) {
     constexpr char key[] = "KAL_GRANT_RIGHTS=";
     constexpr okm_uptr key_len = sizeof key - 1;
+    okm::ensure_recorded();
     const char* v = nullptr;
     for (char** e = okm::g_envp; e && *e; ++e) {
         okm_uptr i = 0;
@@ -98,6 +99,7 @@ void adopt_rights(const preopen* t, kal_uintptr count) {
 bool granted(preopen* t, kal_uintptr* n) {
     constexpr char key[] = "KAL_PREOPENS=";
     constexpr okm_uptr key_len = sizeof key - 1;
+    okm::ensure_recorded();
     const char* v = nullptr;
     for (char** e = okm::g_envp; e && *e; ++e) {
         okm_uptr i = 0;

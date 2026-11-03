@@ -403,10 +403,16 @@ jobs:
           #   sandbox_init_with_parameters      this system's sandbox, which a
           #     confined program is started in (KAL_SPAWN_CONFINE, openkal
           #     0.23); a name no C library in this ecosystem defines.
+          #   _NSGetArgc, _NSGetArgv, _NSGetEnviron
+          #                                     THE LOADER'S RECORD of the
+          #     arguments and the environment (0.21.3), for a question asked
+          #     before this package's initialiser ran: an initialiser linked
+          #     ahead of it runs first on this format (src/env.cpp). Names no C
+          #     library in this ecosystem defines.
           #   okm_sigtramp                      this package's own: the
           #     trampoline a handler is installed with (src/process.cpp), named
           #     in C because the kernel's interface takes its address.
-          permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|pthread_create|pthread_join|_pthread_self|_pthread_get_stackaddr_np|_pthread_get_stacksize_np|pthread_set_qos_class_self_np|pthread_threadid_np|_dyld_atfork_(prepare|parent)|_dyld_fork_child|_(malloc|libc)_fork_(prepare|parent|child)|_pthread_atfork_(prepare|parent|child)|_mach_fork_child|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume|__dso_handle|__cxa_atexit|mach_task_self_|mach_vm_protect|sandbox_init_with_parameters|okm_sigtramp|section\$(start|end)\$__TEXT\$__(eh_frame|unwind_info))$'
+          permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|pthread_create|pthread_join|_pthread_self|_pthread_get_stackaddr_np|_pthread_get_stacksize_np|pthread_set_qos_class_self_np|pthread_threadid_np|_dyld_atfork_(prepare|parent)|_dyld_fork_child|_(malloc|libc)_fork_(prepare|parent|child)|_pthread_atfork_(prepare|parent|child)|_mach_fork_child|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume|__dso_handle|__cxa_atexit|mach_task_self_|mach_vm_protect|sandbox_init_with_parameters|_NSGetArgc|_NSGetArgv|_NSGetEnviron|okm_sigtramp|section\$(start|end)\$__TEXT\$__(eh_frame|unwind_info))$'
           # Reported with the object that references it. A symbol without the
           # object it came from names a fault and not a place, and the first
           # time this check fired the answer was in the object rather than in
