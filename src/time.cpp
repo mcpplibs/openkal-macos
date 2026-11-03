@@ -56,7 +56,9 @@ kal_duration kal_time_monotonic_granularity(void) {
 void kal_time_sleep(kal_duration ns) {
     if (ns == 0) return;
     const kal_duration target = kal_time_monotonic() + ns;
-    static volatile okm_u32 never = 0;
+    // The word nothing wakes is on this context's stack, in memory as the wait
+    // begins (okm::ulock_wait).
+    volatile okm_u32 never = 0;
     for (;;) {
         const kal_duration now = kal_time_monotonic();
         if (now >= target) return;
@@ -67,10 +69,7 @@ void kal_time_sleep(kal_duration ns) {
         // rounding down is returning early.
         const okm_u32 microseconds = static_cast<okm_u32>(remaining / 1000u);
         if (microseconds == 0) { okm::relax(); continue; }
-        okm::sys(okm::nr_ulock_wait,
-                 static_cast<okm_long>(okm::ul_compare_and_wait | okm::ulf_no_errno),
-                 reinterpret_cast<okm_long>(const_cast<okm_u32*>(&never)),
-                 0, static_cast<okm_long>(microseconds));
+        okm::ulock_wait(&never, 0, microseconds);
     }
 }
 
