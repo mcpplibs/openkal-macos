@@ -243,9 +243,7 @@ int kal_task_join(kal_task h) {
     // wait, because that one's name is among the ones a program above may
     // define. The word the context sets before it ends is what is waited upon.
     while (__atomic_load_n(&c->finished, __ATOMIC_ACQUIRE) == 0) {
-        okm::sys(okm::nr_ulock_wait,
-                 static_cast<okm_long>(okm::ul_compare_and_wait | okm::ulf_no_errno),
-                 reinterpret_cast<okm_long>(const_cast<okm_u32*>(&c->finished)), 0, 0);
+        okm::ulock_wait(&c->finished, 0, 0);
     }
 #else
     const int rc = ::pthread_join(reinterpret_cast<void*>(
@@ -316,12 +314,7 @@ int kal_task_wait(const kal_u32* word, kal_u32 expected,
         microseconds = rounded > 0xfffffffeu ? 0xfffffffeu : static_cast<okm_u32>(rounded);
     }
     for (;;) {
-        const okm_long r = okm::sys(okm::nr_ulock_wait,
-                                    static_cast<okm_long>(okm::ul_compare_and_wait
-                                                        | okm::ulf_no_errno),
-                                    reinterpret_cast<okm_long>(const_cast<kal_u32*>(word)),
-                                    static_cast<okm_long>(expected),
-                                    static_cast<okm_long>(microseconds));
+        const okm_long r = okm::ulock_wait(word, expected, microseconds);
         if (r >= 0) return kal_ok;
         // The value had already changed, which is a successful outcome: the
         // caller's condition no longer holds and it should re-examine it.

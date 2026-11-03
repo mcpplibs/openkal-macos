@@ -2,9 +2,22 @@
 import openkal.env;
 import openkal.time;
 import openkal.stream;
+import openkal.process;
 
 namespace {
 int failures = 0;
+
+// This program's processor time, or ~0 where the interface does not say.
+kal_u64 processor_ns() {
+    kal_process me{};
+    if (kal_process_self(&me) != kal_ok) return ~0ull;
+    kal_program_info info{};
+    info.self_size = sizeof info;
+    const bool ok = kal_process_info(me, kal::process::info::cpu, &info) == kal_ok
+                 && (info.present & kal::process::info::cpu);
+    kal_process_close(me);
+    return ok ? info.cpu_ns : ~0ull;
+}
 void check(bool ok, const char* what) {
     if (ok) return;
     ++failures;
@@ -43,6 +56,15 @@ int main() {
     check(b >= a, "the monotonic source does not decrease");
     check(b - a >= 2 * 1000 * 1000, "suspension lasts at least as long as requested");
     check(kal::time::granularity() > 0, "the granularity is reported");
+
+    // A SUSPENSION IS NOT PROCESSOR TIME (0.21.1). The wait this implementation
+    // suspends with failed at once for a word whose page was not yet present,
+    // and a sleep was a spin of the processor for its whole length.
+    const kal_u64 c0 = processor_ns();
+    kal::time::sleep(200 * 1000 * 1000);
+    const kal_u64 c1 = processor_ns();
+    check(c0 != ~0ull && c1 != ~0ull && c1 - c0 < 50 * 1000 * 1000,
+          "200 ms asleep is under 50 ms of processor time");
 
     // The wall source is claimed by this implementation, so it must report a
     // time after the specification was written rather than zero.

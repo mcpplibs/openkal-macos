@@ -333,6 +333,23 @@ enum : okm_u32 {
 inline bool failed(okm_long r) { return r < 0 && r > -4096; }
 inline bool interrupted(okm_long r) { return r == -e_intr; }
 
+// A WAIT UPON A WORD, WITH THE WORD IN MEMORY (0.21.1). This kernel reads the
+// word without taking a fault and answers EFAULT for a page not yet present:
+// a word of zeros nothing has written, as the sleep's own was, which made every
+// sleep a spin of the processor for its whole length (measured on the macOS
+// runners: 200 ms asleep, 127 to 200 ms of processor time, on arm64 and
+// x86_64). Its own C library reads the word and asks again; so does this, a
+// bounded number of times.
+inline okm_long ulock_wait(const volatile okm_u32* word, okm_u32 expected, okm_u32 microseconds) {
+    for (int asked = 0;; ++asked) {
+        const okm_long r = sys(nr_ulock_wait, static_cast<okm_long>(ul_compare_and_wait | ulf_no_errno),
+                               reinterpret_cast<okm_long>(word), static_cast<okm_long>(expected),
+                               static_cast<okm_long>(microseconds));
+        if (r != -e_fault || asked == 8) return r;
+        (void)*word;   // the read brings the page in
+    }
+}
+
 // The environment's error values, mapped onto the closed set the specification
 // defines. A table preserves the naturalness clause 7.1 requires;
 // reconstructing a foreign namespace would not.

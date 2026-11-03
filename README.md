@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.23.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.21.0"
+openkal-macos = "0.21.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -196,6 +196,16 @@ made readable and not executable, each page made executable again at its first
 execution (`SIGBUS` or `SIGSEGV`) and recorded. `kal_process_info`
 reports faults from `getrusage` for this program and `PROC_PIDTASKINFO` for
 another; `kal_memory_info` is `hw.memsize` and `kern.memorystatus_level`.
+
+**A suspension is not processor time (0.21.1).** The kernel reads the word a
+wait names (`ulock_wait`) without taking a fault and answers `EFAULT` for a page
+not yet present. `kal_time_sleep` waited on a word of zeros nothing had written,
+so every wait failed at once and a sleep was a spin of the processor for its
+whole length: 200 ms asleep cost 127 to 200 ms of processor time on the arm64
+and x86_64 runners. The word is now on the sleeping context's stack, and every
+wait reads its word and asks again on `EFAULT`, as the system's own C library
+does. The conformance suite asserts that 200 ms asleep is under 50 ms of
+processor time.
 
 ## What 0.20 adds (openkal 0.22)
 
