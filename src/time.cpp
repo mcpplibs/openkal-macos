@@ -40,17 +40,17 @@ kal_duration kal_time_wall(void) {
 }
 
 kal_duration kal_time_monotonic_granularity(void) {
-    // Measured rather than declared: the source is read until it changes, and
-    // the difference is what it can resolve. A granularity that was asserted
-    // rather than observed would be a claim about the machine this was written
-    // on rather than about the one it is running on.
-    static kal_duration remembered = 0;
-    if (remembered) return remembered;
-    const kal_duration first = kal_time_monotonic();
-    kal_duration next = first;
-    for (int i = 0; i < 1000000 && next == first; ++i) next = kal_time_monotonic();
-    remembered = next > first ? next - first : 1;
-    return remembered;
+    // The source advances by one of the kernel's ticks, and the kernel states
+    // what a tick is on the machine it runs on (okm::timebase): 41.67 ns on
+    // arm64, rounded up, and 1 ns on x86_64. Until 0.21.2 the source was read
+    // until it changed, and the difference --- 41, 42 or more, as the reading
+    // loop was scheduled --- differed from one start of a program to the next;
+    // a loader that keeps what a program's initialisers computed compares the
+    // implementation's facts, and declined it for that difference alone.
+    okm_u32 numer = 1, denom = 1;
+    okm::timebase(numer, denom);
+    const kal_duration ns = (static_cast<kal_duration>(numer) + denom - 1) / denom;
+    return ns ? ns : 1;
 }
 
 void kal_time_sleep(kal_duration ns) {

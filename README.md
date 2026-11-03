@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.23.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.21.1"
+openkal-macos = "0.21.2"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -206,6 +206,15 @@ and x86_64 runners. The word is now on the sleeping context's stack, and every
 wait reads its word and asks again on `EFAULT`, as the system's own C library
 does. The conformance suite asserts that 200 ms asleep is under 50 ms of
 processor time.
+
+**The granularity is the machine's (0.21.2).** `kal_time_monotonic_granularity`
+read the source until it changed, and the difference --- 41, 42 or more as the
+reading loop was scheduled --- differed from one start of a program to the next.
+It is now the kernel's tick (`mach_timebase_info`) rounded up: 42 ns on arm64,
+1 ns on x86_64. openkal-image's runner compares it among the implementation's
+facts before it uses a snapshot of a program's initialisers, and declined one
+for that difference alone. The conformance suite asserts that another start of
+a program states the same granularity.
 
 ## What 0.20 adds (openkal 0.22)
 
