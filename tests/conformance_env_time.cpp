@@ -15,6 +15,17 @@ extern "C" char* realpath(const char* path, char* resolved);
 namespace {
 int failures = 0;
 
+// ASKED BEFORE THIS IMPLEMENTATION'S INITIALISER RAN (0.21.3). This format runs
+// initialisers in link order, and this test's objects precede the package's: a
+// C library's initialiser linked ahead of it asks the same way.
+kal_uintptr g_early_args = 0;
+kal_intptr  g_early_path = -1;
+[[gnu::constructor]] void ask_early() {
+    g_early_args = kal::env::arg_count();
+    char buf[8];
+    g_early_path = kal::env::var("PATH", 4, buf, sizeof buf);
+}
+
 // This program's processor time, or ~0 where the interface does not say.
 kal_u64 processor_ns() {
     kal_process me{};
@@ -74,6 +85,8 @@ int main(int argc, char** argv) {
     // A program always receives the name it was started with, even where the
     // environment has none, in which case it is empty rather than absent.
     check(kal::env::arg_count() >= 1, "at least the program name is present");
+    check(g_early_args == kal::env::arg_count() && g_early_path > 0,
+          "an initialiser that runs before this implementation's is answered the same");
     // THE VALUE IS COPIED AND THE LENGTH REPORTED IS THE VALUE'S OWN, so a
     // capacity of zero asks for the length without writing.
     char buf[1024];

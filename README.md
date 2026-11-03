@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.23.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.21.2"
+openkal-macos = "0.21.3"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -206,6 +206,18 @@ and x86_64 runners. The word is now on the sleeping context's stack, and every
 wait reads its word and asks again on `EFAULT`, as the system's own C library
 does. The conformance suite asserts that 200 ms asleep is under 50 ms of
 processor time.
+
+**Asked before this implementation's initialiser ran (0.21.3).** This format
+runs initialisers in link order, and an initialiser linked ahead of this package
+asks first: openkal-musl's, which reads the program's directories when it brings
+the C library up, ahead of this package in the hosted arrangement. It was
+answered as though the program had been started with none: the directories a
+starter granted, with their rights, gave way to this implementation's defaults,
+the whole file system writable (mcpplibs/os's process test: a program granted a
+directory read-only created a file in it). The arguments and the environment
+are now taken from the loader's record of them (`_NSGetArgc`, `_NSGetArgv`,
+`_NSGetEnviron`) when they have not been recorded yet. The conformance suite
+asks from an initialiser linked ahead of the package.
 
 **The granularity is the machine's (0.21.2).** `kal_time_monotonic_granularity`
 read the source until it changed, and the difference --- 41, 42 or more as the

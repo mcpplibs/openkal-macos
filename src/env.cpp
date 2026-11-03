@@ -21,6 +21,33 @@ void record(int argc, char** argv, char** envp) {
 
 }  // namespace okm
 
+// THE LOADER'S OWN RECORD OF THEM (0.21.3), for a question asked before this
+// implementation's initialiser ran. This format runs an image's initialisers in
+// link order, and an initialiser of an object linked before this package asks
+// first: openkal-musl's, which brings the C library up and reads the program's
+// directories (kal_fs_preopen) when it is linked ahead of this package, as the
+// hosted arrangement links it. It was answered as though the program had been
+// given none: the directories a starter granted, with their rights, were
+// replaced by this implementation's defaults, the whole file system writable
+// (mcpplibs/os's process test, a program granted a directory read-only that
+// created a file in it). The loader keeps the three where `_NSGetArgc',
+// `_NSGetArgv' and `_NSGetEnviron' answer, set before any initialiser of a
+// program runs; the names are left for the loader to find among the images it
+// has loaded (mcpp.toml's `-U'), as the names `fork' needs are.
+extern "C" {
+int*    _NSGetArgc(void)    __attribute__((weak_import));
+char*** _NSGetArgv(void)    __attribute__((weak_import));
+char*** _NSGetEnviron(void) __attribute__((weak_import));
+}
+
+namespace okm {
+void ensure_recorded() {
+    if (g_argv != nullptr) return;
+    if (_NSGetArgc == nullptr || _NSGetArgv == nullptr || _NSGetEnviron == nullptr) return;
+    record(*_NSGetArgc(), *_NSGetArgv(), *_NSGetEnviron());
+}
+}  // namespace okm
+
 namespace {
 
 // A PROGRAM ABOVE openkal SHALL NOT BE ENDED BY SOMETHING openkal NEVER TOLD
@@ -77,7 +104,7 @@ void ignore_sigpipe() {
 
 extern "C" {
 
-kal_uintptr kal_env_arg_count(void) { return static_cast<kal_uintptr>(okm::g_argc); }
+kal_uintptr kal_env_arg_count(void) { okm::ensure_recorded(); return static_cast<kal_uintptr>(okm::g_argc); }
 
 // EVERY VALUE IS COPIED INTO THE CALLER'S BUFFER. These answered with a pointer
 // into this implementation's own storage, which is meaningful only while the
@@ -92,6 +119,7 @@ kal_intptr give(const char* v, kal_uintptr n, char* out, kal_uintptr cap) {
 }  // namespace
 
 kal_intptr kal_env_arg(kal_uintptr index, char* out, kal_uintptr cap) {
+    okm::ensure_recorded();
     if (index >= static_cast<kal_uintptr>(okm::g_argc)) return -kal_err_not_found;
     const char* s = okm::g_argv[index];
     return give(s, okm::length(s), out, cap);
@@ -100,6 +128,7 @@ kal_intptr kal_env_arg(kal_uintptr index, char* out, kal_uintptr cap) {
 kal_intptr kal_env_var(const char* name, kal_uintptr name_len,
                        char* out, kal_uintptr cap) {
     if (name == nullptr) return -kal_err_invalid;
+    okm::ensure_recorded();
     for (char** e = okm::g_envp; e && *e; ++e) {
         const char* entry = *e;
         kal_uintptr i = 0;
@@ -114,6 +143,7 @@ kal_intptr kal_env_var(const char* name, kal_uintptr name_len,
 }
 
 kal_uintptr kal_env_var_count(void) {
+    okm::ensure_recorded();
     kal_uintptr n = 0; for (char** e = okm::g_envp; e && *e; ++e) ++n; return n;
 }
 
@@ -121,6 +151,7 @@ kal_uintptr kal_env_var_count(void) {
 // operation answering both needs two buffers, two capacities and two lengths,
 // and its second half is kal_env_var written again.
 kal_intptr kal_env_var_at(kal_uintptr index, char* out, kal_uintptr cap) {
+    okm::ensure_recorded();
     kal_uintptr n = 0;
     for (char** e = okm::g_envp; e && *e; ++e, ++n) {
         if (n != index) continue;
@@ -151,6 +182,7 @@ kal_intptr kal_env_image(char* out, kal_uintptr cap) {
         kal_uintptr len = 0; while (len < sizeof buf && buf[len] != '\0') ++len;
         if (len > 0) return give(buf, len, out, cap);
     }
+    okm::ensure_recorded();
     if (okm::g_envp != nullptr) {
         char** a = okm::g_envp;
         while (*a) ++a;
@@ -184,6 +216,7 @@ int resource_preference() {
     v = 0;
     constexpr char key[] = "KAL_RESOURCES=";
     constexpr okm_uptr key_len = sizeof key - 1;
+    ensure_recorded();
     for (char** e = okm::g_envp; e && *e; ++e) {
         okm_uptr i = 0;
         while (i < key_len && (*e)[i] == key[i]) ++i;
