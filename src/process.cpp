@@ -1386,7 +1386,7 @@ void kal_process_close(kal_process h) {
 // because `kal_process_spawn' above refuses every flag; STOP_REQUESTED is
 // claimed only where the trampoline it needs has been entered by a running
 // program, which is the architecture continuous integration executes.
-kal_uintptr kal_process_props(void) { return
+kal_uintptr kal_process_props(void) { return KAL_PROCESS_PROP_JOB_OBSERVE |
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
@@ -1406,4 +1406,100 @@ kal_uintptr kal_process_props(void) { return
 #endif
   ; }
 
+}
+
+// Observable units (openkal 0.24). The unit stays the kernel's own group;
+// identity validation does not create a registry or infer quiet from a leader.
+#include "unit_reference.h"
+namespace {
+struct unit_identity {
+    kal_u64 group = 0, birth = 0;
+    char boot[64]{}, space[64]{};
+};
+bool unit_birth(okm_long pid, kal_u64& value) {
+    bsdinfo b{}; if (!bsd(pid == 0 ? okm::sys(okm::nr_getpid) : pid,b)) return false;
+    value = b.start_sec * 1000000ull + b.start_usec; return value != 0;
+}
+bool unit_origin(char* boot, char*) {
+    static const char name[] = "kern.bootsessionuuid";
+    int lookup[2]{0,3}, oid[8]{}; okm_uptr oid_size = sizeof oid;
+    auto rc = okm::sys(okm::nr_sysctl,reinterpret_cast<okm_long>(lookup),2,
+        reinterpret_cast<okm_long>(oid),reinterpret_cast<okm_long>(&oid_size),
+        reinterpret_cast<okm_long>(name),sizeof name - 1);
+    if (okm::failed(rc) || oid_size < sizeof(int)) return false;
+    okm_uptr size = 63;
+    rc = okm::sys(okm::nr_sysctl,reinterpret_cast<okm_long>(oid),oid_size / sizeof(int),
+        reinterpret_cast<okm_long>(boot),reinterpret_cast<okm_long>(&size),0,0);
+    if (okm::failed(rc) || size == 0 || size > 63) return false;
+    boot[size] = 0; return true;
+}
+bool unit_parse(const char* p, kal_uintptr n, unit_identity& u) {
+    if (!p || n == 0 || n > 256) return false;
+    unit_reference::reader r{p,n}; char kind[8]{};
+    return r.token(kind, sizeof kind) && unit_reference::same(kind,"M2")
+        && r.number(u.group) && u.group > 0 && u.group <= 0x7fffffffu
+        && r.number(u.birth) && u.birth != 0
+        && r.token(u.boot,sizeof u.boot) && r.at == n;
+}
+bool unit_same_origin(const unit_identity& u) {
+    char boot[64]{}, space[64]{};
+    return unit_origin(boot,space) && unit_reference::same(u.boot,boot);
+}
+}
+extern "C" {
+int kal_process_job_create(kal_job* out, char* reference, kal_uintptr capacity, kal_uintptr* used) {
+    if (!out || !reference || !used) return kal_err_invalid;
+    if (capacity < 256) return kal_err_no_space;
+    unit_identity u;
+    u.group = static_cast<kal_u64>(okm::sys(okm::nr_getpid));
+    if (!unit_origin(u.boot,u.space)||!unit_birth(0,u.birth)||!u.birth) return kal_err_not_supported;
+    unit_reference::writer w; w.text("M2;"); w.number(u.group); w.next(); w.number(u.birth); w.next();
+    w.text(u.boot);
+    if (!w.valid) return kal_err_no_space;
+    kal_job job{}; const int rc = kal_process_job_enter(&job);
+    if (rc != kal_ok) return rc;
+    *out = job; return unit_reference::copy(w,reference,capacity,used);
+}
+int kal_process_job_open(const char* reference, kal_uintptr length, kal_job* out) {
+    if (!out) return kal_err_invalid;
+    unit_identity u; if (!unit_parse(reference,length,u)) return kal_err_invalid;
+    if (!unit_same_origin(u)) return kal_err_not_supported;
+    out->h = static_cast<kal_uintptr>(u.group); return kal_ok;
+}
+int kal_process_job_observe(kal_job job, const char* reference, kal_uintptr length, kal_u32* state) {
+    if (!state) return kal_err_invalid; *state = KAL_JOB_UNKNOWN;
+    unit_identity u; if (!unit_parse(reference,length,u) || job.h != u.group) return kal_err_invalid;
+    if (!unit_same_origin(u)) return kal_ok;
+    const auto status = okm::sys(okm::nr_kill,-static_cast<okm_long>(u.group),0);
+    if (status == -3 /* ESRCH */) { *state = KAL_JOB_EMPTY; return kal_ok; }
+    if (okm::failed(status)) return kal_ok;
+    kal_u64 birth = 0;
+    if (unit_birth(static_cast<okm_long>(u.group),birth) && birth != u.birth) return kal_ok;
+    *state = KAL_JOB_OCCUPIED; return kal_ok;
+}
+int kal_process_job_retire(kal_job job, const char* reference, kal_uintptr length,
+                           const kal_program_identity* continuation, kal_u32* state) {
+    if (!state) return kal_err_invalid; *state = KAL_JOB_UNKNOWN;
+    unit_identity u; if (!unit_parse(reference,length,u) || job.h != u.group) return kal_err_invalid;
+    kal_u64 birth = 0;
+    if (static_cast<kal_u64>(okm::sys(okm::nr_getpid)) != u.group || !unit_same_origin(u)
+        || !unit_birth(0,birth) || birth != u.birth) return kal_err_permission;
+    if (!continuation || !continuation->id || continuation->id > 0x7fffffffu || !continuation->started_ns)
+        return kal_ok;
+    const auto anchor = static_cast<okm_long>(continuation->id);
+    bsdinfo destination{},self{};
+    if (!bsd(anchor,destination) || destination.status == 5
+        || destination.start_sec * 1000000000ull + destination.start_usec * 1000ull != continuation->started_ns
+        || !bsd(static_cast<okm_long>(u.group),self)) return kal_ok;
+    if (destination.pgid == 0 || destination.pgid == u.group) return kal_ok;
+    const auto destination_group = destination.pgid;
+    if (self.pgid == u.group) {
+        if (okm::failed(okm::sys(nr_setpgid,0,static_cast<okm_long>(destination.pgid)))) return kal_ok;
+    } else if (self.pgid != destination.pgid) return kal_ok;
+    if (!bsd(anchor,destination) || destination.status == 5
+        || destination.start_sec * 1000000000ull + destination.start_usec * 1000ull != continuation->started_ns
+        || destination.pgid != destination_group
+        || !bsd(static_cast<okm_long>(u.group),self) || self.pgid != destination_group) return kal_ok;
+    return kal_process_job_observe(job,reference,length,state);
+}
 }

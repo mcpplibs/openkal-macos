@@ -5,16 +5,23 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.23.0"
+openkal = "0.24.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.21.3"
+openkal-macos = "0.22.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
 satisfied only by the system it was written against has not been shown to be
 portable, however many programs that system hosts; a second implementation on a
 different system is what turns the claim into an observation.
+
+## Observable process units
+
+The process interface provides the OpenKal 0.24 declared-unit operations.
+References retain the original process identity, birth and boot session.
+Retirement checks the live continuation before and after membership migration;
+ambiguity reports `unknown`. No process registry is installed.
 
 ## Interfaces provided
 
