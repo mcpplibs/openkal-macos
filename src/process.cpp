@@ -1413,7 +1413,7 @@ kal_uintptr kal_process_props(void) { return KAL_PROCESS_PROP_JOB_OBSERVE |
 #include "unit_reference.h"
 namespace {
 struct unit_identity {
-    kal_u64 group = 0, birth = 0, previous = 0, previous_birth = 0;
+    kal_u64 group = 0, birth = 0;
     char boot[64]{}, space[64]{};
 };
 bool unit_birth(okm_long pid, kal_u64& value) {
@@ -1436,11 +1436,9 @@ bool unit_origin(char* boot, char*) {
 bool unit_parse(const char* p, kal_uintptr n, unit_identity& u) {
     if (!p || n == 0 || n > 256) return false;
     unit_reference::reader r{p,n}; char kind[8]{};
-    return r.token(kind, sizeof kind) && unit_reference::same(kind,"M1")
+    return r.token(kind, sizeof kind) && unit_reference::same(kind,"M2")
         && r.number(u.group) && u.group > 0 && u.group <= 0x7fffffffu
         && r.number(u.birth) && u.birth != 0
-        && r.number(u.previous) && u.previous > 0 && u.previous <= 0x7fffffffu
-        && r.number(u.previous_birth) && u.previous_birth != 0
         && r.token(u.boot,sizeof u.boot) && r.at == n;
 }
 bool unit_same_origin(const unit_identity& u) {
@@ -1454,13 +1452,9 @@ int kal_process_job_create(kal_job* out, char* reference, kal_uintptr capacity, 
     if (capacity < 256) return kal_err_no_space;
     unit_identity u;
     u.group = static_cast<kal_u64>(okm::sys(okm::nr_getpid));
-    bsdinfo self{}; if (!bsd(static_cast<okm_long>(u.group),self)) return kal_err_not_supported;
-    u.previous = self.pgid;
-    if (u.previous == u.group || !unit_origin(u.boot,u.space)
-        || !unit_birth(0,u.birth) || !unit_birth(static_cast<okm_long>(u.previous),u.previous_birth)
-        || !u.birth || !u.previous_birth) return kal_err_not_supported;
-    unit_reference::writer w; w.text("M1;"); w.number(u.group); w.next(); w.number(u.birth); w.next();
-    w.number(u.previous); w.next(); w.number(u.previous_birth); w.next(); w.text(u.boot);
+    if (!unit_origin(u.boot,u.space)||!unit_birth(0,u.birth)||!u.birth) return kal_err_not_supported;
+    unit_reference::writer w; w.text("M2;"); w.number(u.group); w.next(); w.number(u.birth); w.next();
+    w.text(u.boot);
     if (!w.valid) return kal_err_no_space;
     kal_job job{}; const int rc = kal_process_job_enter(&job);
     if (rc != kal_ok) return rc;
@@ -1483,19 +1477,29 @@ int kal_process_job_observe(kal_job job, const char* reference, kal_uintptr leng
     if (unit_birth(static_cast<okm_long>(u.group),birth) && birth != u.birth) return kal_ok;
     *state = KAL_JOB_OCCUPIED; return kal_ok;
 }
-int kal_process_job_retire(kal_job job, const char* reference, kal_uintptr length, kal_u32* state) {
+int kal_process_job_retire(kal_job job, const char* reference, kal_uintptr length,
+                           const kal_program_identity* continuation, kal_u32* state) {
     if (!state) return kal_err_invalid; *state = KAL_JOB_UNKNOWN;
     unit_identity u; if (!unit_parse(reference,length,u) || job.h != u.group) return kal_err_invalid;
     kal_u64 birth = 0;
     if (static_cast<kal_u64>(okm::sys(okm::nr_getpid)) != u.group || !unit_same_origin(u)
         || !unit_birth(0,birth) || birth != u.birth) return kal_err_permission;
-    bsdinfo self{}; if (!bsd(static_cast<okm_long>(u.group),self)) return kal_ok;
-    const auto current = self.pgid;
-    if (current == static_cast<okm_long>(u.group)) {
-        if (!unit_birth(static_cast<okm_long>(u.previous),birth) || birth != u.previous_birth) return kal_ok;
-        const auto rc = okm::sys(nr_setpgid,0,static_cast<okm_long>(u.previous));
-        if (okm::failed(rc)) return kal_ok;
-    } else if (current != static_cast<okm_long>(u.previous)) return kal_ok;
+    if (!continuation || !continuation->id || continuation->id > 0x7fffffffu || !continuation->started_ns)
+        return kal_ok;
+    const auto anchor = static_cast<okm_long>(continuation->id);
+    bsdinfo destination{},self{};
+    if (!bsd(anchor,destination) || destination.status == 5
+        || destination.start_sec * 1000000000ull + destination.start_usec * 1000ull != continuation->started_ns
+        || !bsd(static_cast<okm_long>(u.group),self)) return kal_ok;
+    if (destination.pgid == 0 || destination.pgid == u.group) return kal_ok;
+    const auto destination_group = destination.pgid;
+    if (self.pgid == u.group) {
+        if (okm::failed(okm::sys(nr_setpgid,0,static_cast<okm_long>(destination.pgid)))) return kal_ok;
+    } else if (self.pgid != destination.pgid) return kal_ok;
+    if (!bsd(anchor,destination) || destination.status == 5
+        || destination.start_sec * 1000000000ull + destination.start_usec * 1000ull != continuation->started_ns
+        || destination.pgid != destination_group
+        || !bsd(static_cast<okm_long>(u.group),self) || self.pgid != destination_group) return kal_ok;
     return kal_process_job_observe(job,reference,length,state);
 }
 }
