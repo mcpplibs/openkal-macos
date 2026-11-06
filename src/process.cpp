@@ -43,22 +43,47 @@ constexpr kal_uintptr kMaxEntries = 512;
 // are not read-only and the devices a program writes to. Asking whether a name
 // exists, and what it is, is not refused: it reveals what the name is, which
 // the rule above already allows a program to learn by trying.
+//
+// THE RULES ARE AS LONG AS THE GRANTS MAKE THEM (0.22.1). A fixed 16 KiB was
+// exceeded by sixteen long grants, and the start was refused with
+// kal_err_invalid, which says the request was malformed. The capacity is now
+// the bound of what `build' can write --- the fixed rules, the program's name
+// quoted, and each grant's name quoted in both rules --- and memory for it is
+// obtained before the start. A start whose rules cannot be held fails with
+// kal_err_no_memory; one whose rules outgrow the bound, which the bound
+// excludes, with kal_err_no_space.
 struct profile {
-    char     text[16384];
-    okm_uptr n = 0;
-    bool put(const char* s) { while (*s) { if (n + 1 >= sizeof text) return false; text[n++] = *s++; } text[n] = '\0'; return true; }
+    static constexpr okm_uptr kFixed = 1024;          // the literal rules, with room
+    static constexpr okm_uptr kName  = 1024;          // F_GETPATH's MAXPATHLEN
+    static constexpr okm_uptr kGrant = 2 * (16 + 2 * kName + 2);
+    char*    text = nullptr;
+    okm_uptr cap  = 0;
+    okm_uptr n    = 0;
+    profile() = default;
+    profile(const profile&) = delete;
+    profile& operator=(const profile&) = delete;
+    ~profile() { if (text) kal_free(text, cap, 1); }
+    bool reserve(kal_uintptr grants, const char* program) {
+        okm_uptr p = 0;
+        while (program[p]) ++p;
+        cap  = kFixed + 2 * p + 4 + grants * kGrant;
+        text = static_cast<char*>(kal_alloc(cap, 1));
+        return text != nullptr;
+    }
+    bool put(const char* s) { while (*s) { if (n + 1 >= cap) return false; text[n++] = *s++; } text[n] = '\0'; return true; }
     bool quoted(const char* s) {
         if (!put("\"")) return false;
         for (; *s; ++s) {
-            if (n + 3 >= sizeof text) return false;
+            if (n + 3 >= cap) return false;
             if (*s == '"' || *s == '\\') text[n++] = '\\';
             text[n++] = *s;
         }
         text[n] = '\0';
         return put("\"");
     }
-    bool build(const okm_long* grants, const okm_u32* rights, kal_uintptr g, const char* program) {
-        char path[1024];
+    int build(const okm_long* grants, const okm_u32* rights, kal_uintptr g, const char* program) {
+        if (!reserve(g, program)) return kal_err_no_memory;
+        char path[kName];
         bool ok = put("(version 1)\n(allow default)\n(deny file-write* (require-not (require-any"
                       " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\")");
         for (kal_uintptr i = 0; ok && i < g; ++i) {
@@ -82,7 +107,7 @@ struct profile {
             if (okm::failed(okm::sys(okm::nr_fcntl, grants[i], okm::f_getpath, reinterpret_cast<okm_long>(path)))) continue;
             ok = put(" (subpath ") && quoted(path) && put(")");
         }
-        return ok && put(")))\n");
+        return ok && put(")))\n") ? kal_ok : kal_err_no_space;
     }
 };
 
@@ -907,7 +932,10 @@ int kal_process_spawn(const kal_spawn* how,
     // CONFINED (0.23): the rules are written here, before the duplication, and
     // applied in the duplicate before it is replaced.
     profile rules;
-    if (confine && !rules.build(granted, grant_rights, how->grant_count, whole)) return kal_err_invalid;
+    if (confine) {
+        const int built = rules.build(granted, grant_rights, how->grant_count, whole);
+        if (built != kal_ok) return built;
+    }
 
     const okm_long in = streams ? static_cast<okm_long>(streams->in.h)  : 0;
     const okm_long ou = streams ? static_cast<okm_long>(streams->out.h) : 0;

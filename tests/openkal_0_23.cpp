@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <mach-o/dyld.h>
 import openkal.types;
@@ -162,6 +163,39 @@ int main(int argc, char** argv) {
             std::printf("  the confined program reported %d (ended by %d), granted:\n", s, g_ended_by);
             for (kal_uintptr k = 0; k < count; ++k) std::printf("    %s\n", names[k]);
         }
+
+        // SIXTEEN LONG GRANTS (0.22.1): the rules name every grant twice, and
+        // a fixed 16 KiB could not hold sixteen names near MAXPATHLEN; the
+        // start was refused with kal_err_invalid. The grants above are kept
+        // (the program loads from them) and the rest are long directories.
+        char deep[1024];
+        std::snprintf(deep, sizeof deep, "%s", g_dir);
+        while (std::strlen(deep) + 1 + 100 < 900) {
+            char part[101];
+            std::memset(part, 'd', 100);
+            part[100] = 0;
+            std::strcat(deep, "/");
+            std::strcat(deep, part);
+            mkdir(deep, 0755);
+        }
+        kal_uintptr full = count;
+        for (int i = 0; full < 16; ++i) {
+            std::snprintf(names[full], sizeof names[full], "%s/grant-%02d-%s", deep, i, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+            mkdir(names[full], 0755);
+            kal_dir d{}, a{};
+            if (kal_fs_open_dir(root(), names[full] + 1, std::strlen(names[full] + 1), &d) != kal_ok
+                || kal_fs_dir_attenuate(d, &ro, &a) != kal_ok) {
+                check(false, "a long directory is opened and attenuated");
+                break;
+            }
+            grants[full] = kal_preopen{ a, names[full], std::strlen(names[full]) };
+            ++full;
+        }
+        check(full == 16 && std::strlen(names[15]) > 950, "sixteen grants, the last named by more than 950 bytes");
+        const int r = start("--resources", grants, full,
+                            (kal::process::confine_flag | kal::process::economy_flag).bits);
+        check(r == 72, "a confined start with sixteen long grants runs");
+        if (r != 72) std::printf("  the start reported %d (ended by %d)\n", r, g_ended_by);
     } else {
         std::printf("  confinement is not claimed here\n");
     }
