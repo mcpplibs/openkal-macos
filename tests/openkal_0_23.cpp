@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
         // (the program loads from them) and the rest are long directories.
         char deep[1024];
         std::snprintf(deep, sizeof deep, "%s", g_dir);
-        while (std::strlen(deep) + 1 + 100 < 900) {
+        while (std::strlen(deep) + 1 + 100 < 940) {
             char part[101];
             std::memset(part, 'd', 100);
             part[100] = 0;
