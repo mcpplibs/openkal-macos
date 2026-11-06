@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.24.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.22.0"
+openkal-macos = "0.22.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -22,6 +22,15 @@ The process interface provides the OpenKal 0.24 declared-unit operations.
 References retain the original process identity, birth and boot session.
 Retirement checks the live continuation before and after membership migration;
 ambiguity reports `unknown`. No process registry is installed.
+
+**The confinement rules are as long as the grants make them (0.22.1).** The
+sandbox profile names each grant in the write rule and in the read rule. Its
+buffer was a fixed 16 KiB, and sixteen grants with names near `MAXPATHLEN`
+exceeded it; the start was refused with `kal_err_invalid`. The buffer is now
+sized to the bound of what the rules can contain for the grants of that start.
+A start whose rules cannot be held reports `kal_err_no_memory`; overflowing the
+bound, which the bound excludes, reports `kal_err_no_space`. The dependency on
+OpenKal is the compatible range `^0.24.0`.
 
 ## Interfaces provided
 
