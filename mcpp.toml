@@ -61,7 +61,7 @@ provides-interfaces = [
 ]
 
 [dependencies]
-openkal = { git = "https://github.com/mcpplibs/openkal.git", branch = "feat/0.25.0" }
+openkal = "0.25.0"
 
 [build]
 # The flags are attached to this package's own sources rather than to the whole
