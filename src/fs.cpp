@@ -1064,10 +1064,10 @@ int kal_fs_link_create(kal_dir base, const char* name, kal_uintptr len,
 // node the name denotes another name and does not follow a final link. Claimed
 // on the system's own formats (APFS, HFS+), which store several names for one
 // file; a network volume's answer depends on its server and is not claimed. A
-// directory and two volumes are answered before the call: the kernel refuses a
-// directory's second name with EPERM, which reads as a permission, and two
-// volumes with EXDEV, which this interface states as an operation the pair
-// cannot perform.
+// directory is refused before the call, because the kernel refuses its second
+// name with EPERM, which reads as a permission. Two volumes are refused by the
+// kernel with EXDEV, which is reported as kal_err_not_supported: an operation
+// the pair cannot perform.
 int kal_fs_hard_link(kal_dir from, const char* a, kal_uintptr alen,
                      kal_dir to,   const char* b, kal_uintptr blen) {
     const int f = okm::unpack(from.h), t2 = okm::unpack(to.h);
