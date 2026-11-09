@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.24.0"
+openkal = "0.25.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.22.1"
+openkal-macos = "0.23.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -182,6 +182,18 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.23 adds (openkal 0.25)
+
+**A second name for a file** (`kal_fs_hard_link`) is `linkat` with no flags, so a
+final link receives the name itself. `KAL_FS_PROP_HARD_LINKS` is claimed on APFS
+and HFS+, which store several names for one file, and not on a network volume,
+whose answer depends on its server. A directory is refused with
+`kal_err_is_directory` and two volumes with `kal_err_not_supported` before the
+kernel is asked, because its own answers (`EPERM`, `EXDEV`) name other conditions.
+
+**The requests to end are counted.** The handler adds one to the stop word for each
+request and writes one where the count wraps to zero.
 
 ## What 0.21 adds (openkal 0.23)
 

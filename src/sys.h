@@ -186,7 +186,7 @@ enum : okm_long {
     nr_getdirentries64 = 344, nr_bsdthread_terminate = 361,
     nr_thread_selfid = 372,
     nr_openat = 463, nr_renameat = 465, nr_faccessat = 466,
-    nr_fstatat64 = 470, nr_unlinkat = 472, nr_readlinkat = 473,
+    nr_fstatat64 = 470, nr_linkat = 471, nr_unlinkat = 472, nr_readlinkat = 473,
     nr_symlinkat = 474, nr_fstatfs64 = 346, nr_sysctl = 202,
     nr_mkdirat = 475,
     // The descriptor limit, read when the descriptors a process holds cannot be

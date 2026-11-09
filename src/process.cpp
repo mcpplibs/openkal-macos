@@ -1230,7 +1230,12 @@ void stop_handler(int signo) {
     int none = 0;
     __atomic_compare_exchange_n(&g_stop_signal, &none, signo, false,
                                 __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_stop_word, 1u, __ATOMIC_RELEASE);
+    // EACH REQUEST IS COUNTED (openkal 0.25), and the count skips zero when it
+    // wraps, so the word is never zero again once a request has arrived. The
+    // add is atomic, so handlers of two signals that interrupt one another each
+    // count; the fix-up after a wrap only ever writes one.
+    if (__atomic_add_fetch(&g_stop_word, 1u, __ATOMIC_RELEASE) == 0)
+        __atomic_store_n(&g_stop_word, 1u, __ATOMIC_RELEASE);
     // Woken through the same operation `kal_task_wake' performs, issued as the
     // raw call because a handler may not enter code that takes a lock. Waking
     // ALL of them: any number of contexts may be waiting upon this one word, and
