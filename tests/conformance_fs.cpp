@@ -8,21 +8,15 @@
 import openkal.fs;
 import openkal.stream;
 import openkal.task;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
-int failures = 0;
-void check(bool ok, const char* what) {
-    if (ok) return;
-    ++failures;
-    const char pre[] = "FAIL: ";
-    kal::write(kal::err(), pre, sizeof(pre) - 1);
-    kal_uintptr n = 0; while (what[n]) ++n;
-    kal::write(kal::err(), what, n);
-    kal::write(kal::err(), "\n", 1);
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 }
 
-int main() {
+UTest conformance_fs_test{"conformance_fs", [] {
     check(kal::fs::preopen_count() >= 1, "the environment supplies at least one directory");
     auto root = kal::fs::working();
     check(root.h != 0, "the working directory is the first entry");
@@ -182,5 +176,4 @@ int main() {
 
     const char ok[] = "openkal-macos: file system conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);
-    return failures == 0 ? 0 : 1;
-}
+}};

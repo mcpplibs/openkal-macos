@@ -8,39 +8,62 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 #include <unistd.h>
 #include <sys/wait.h>
 import openkal.types;
 import openkal.env;
 import openkal.stream;
 import openkal.process;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
-int failures = 0;
-void check(bool held, const char* what) {
-    if (!held) { std::printf("FAIL: %s\n", what); ++failures; }
+void check(bool held, const char* what) { expect(held) << what; }
+
+#if defined(__aarch64__)
+// Starts this program again, the image `self', as the child `name' and answers
+// its wait status.
+int run_copy(const char* self, const char* name) {
+    const std::vector<std::string> command = child_command(name);
+    std::vector<char*> argv;
+    for (const auto& a : command) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+    const pid_t copy = ::fork();
+    if (copy == 0) {
+        ::execv(self, argv.data());
+        ::_exit(93);
+    }
+    int st = 0;
+    ::waitpid(copy, &st, 0);
+    return st;
 }
+#endif
 }
 
-int main(int argc, char** argv) {
-    if (argc > 1 && std::strcmp(argv[1], "--hang-up") == 0) {
-        const kal_u32* word = kal_process_stop_requested();
-        if (word == nullptr) return 90;
-        ::kill(::getpid(), SIGHUP);
-        for (int i = 0; i < 1000 && *word == 0; ++i) ::usleep(1000);
-        if (*word == 0) return 91;
-        kal_process_end_as_requested();
-        return 92;
-    }
-    if (argc > 1 && std::strcmp(argv[1], "--end-as-requested") == 0) {
-        const kal_u32* word = kal_process_stop_requested();
-        if (word == nullptr) return 90;
-        ::kill(::getpid(), SIGTERM);
-        for (int i = 0; i < 1000 && *word == 0; ++i) ::usleep(1000);
-        if (*word == 0) return 91;
-        kal_process_end_as_requested();
-        return 92;
-    }
+child hang_up{"hang-up", [](std::vector<std::string>) {
+    const kal_u32* word = kal_process_stop_requested();
+    if (word == nullptr) return 90;
+    ::kill(::getpid(), SIGHUP);
+    for (int i = 0; i < 1000 && *word == 0; ++i) ::usleep(1000);
+    if (*word == 0) return 91;
+    kal_process_end_as_requested();
+    return 92;
+}};
+
+child end_as_requested{"end-as-requested", [](std::vector<std::string>) {
+    const kal_u32* word = kal_process_stop_requested();
+    if (word == nullptr) return 90;
+    ::kill(::getpid(), SIGTERM);
+    for (int i = 0; i < 1000 && *word == 0; ++i) ::usleep(1000);
+    if (*word == 0) return 91;
+    kal_process_end_as_requested();
+    return 92;
+}};
+
+UTest stop_word_and_sigpipe_test{"stop_word_and_sigpipe", [] {
 
     {
         kal_stream mine{}, theirs{};
@@ -57,27 +80,14 @@ int main(int argc, char** argv) {
     char self[4096] = {};
     const kal_intptr n = kal_env_image(self, sizeof self - 1);
     check(n > 0, "the program's own image is named");
-    const pid_t child = ::fork();
-    if (child == 0) {
-        ::execl(self, argv[0], "--end-as-requested", nullptr);
-        ::_exit(93);
-    }
-    int st = 0;
-    ::waitpid(child, &st, 0);
+    int st = run_copy(self, "end-as-requested");
     check(WIFSIGNALED(st) && WTERMSIG(st) == SIGTERM,
           "a program that ends as requested is reported to its starter as ended by the request");
-    const pid_t hung = ::fork();
-    if (hung == 0) {
-        ::execl(self, argv[0], "--hang-up", nullptr);
-        ::_exit(93);
-    }
-    st = 0;
-    ::waitpid(hung, &st, 0);
+    st = run_copy(self, "hang-up");
     check(WIFSIGNALED(st) && WTERMSIG(st) == SIGHUP,
           "a hang-up is taken over as a request, and the program ends as it would have (0.15.1)");
 #else
-    (void)word; (void)argv;
+    (void)word;
 #endif
-    if (failures == 0) std::printf("openkal-macos: the stop word given back, and a closed stream reported\n");
-    return failures == 0 ? 0 : 1;
-}
+    std::printf("openkal-macos: the stop word given back, and a closed stream reported\n");
+}};

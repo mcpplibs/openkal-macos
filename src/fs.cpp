@@ -229,7 +229,7 @@ kal_uintptr volume_props(int fd) {
     // Both implement `renameatx_np' with RENAME_EXCL (0.17), and both store a
     // socket bound to a name.
     if (named("apfs") || named("hfs"))
-        return local | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS
+        return local | KAL_FS_PROP_LINKS | KAL_FS_PROP_MAKE_LINKS | KAL_FS_PROP_HARD_LINKS
              | KAL_FS_PROP_EXECUTABLE
              | KAL_FS_PROP_RENAME_NO_REPLACE | KAL_FS_PROP_LOCAL_ENDPOINT;
 
@@ -1057,6 +1057,35 @@ int kal_fs_link_create(kal_dir base, const char* name, kal_uintptr len,
                                 b, reinterpret_cast<okm_long>(n.buf));
     if (okm::failed(r)) return okm::translate(r);
     wrote(b, name, len);
+    return kal_ok;
+}
+
+// A SECOND NAME FOR A FILE (0.25) is `linkat' with no flags, which gives the
+// node the name denotes another name and does not follow a final link. Claimed
+// on the system's own formats (APFS, HFS+), which store several names for one
+// file; a network volume's answer depends on its server and is not claimed. A
+// directory is refused before the call, because the kernel refuses its second
+// name with EPERM, which reads as a permission. Two volumes are refused by the
+// kernel with EXDEV, which is reported as kal_err_not_supported: an operation
+// the pair cannot perform.
+int kal_fs_hard_link(kal_dir from, const char* a, kal_uintptr alen,
+                     kal_dir to,   const char* b, kal_uintptr blen) {
+    const int f = okm::unpack(from.h), t2 = okm::unpack(to.h);
+    if (f < 0 || t2 < 0 || !okm::acceptable(a, alen) || !okm::acceptable(b, blen)) return kal_err_invalid;
+    if ((volume_props(t2) & KAL_FS_PROP_HARD_LINKS) == 0) return kal_err_not_supported;
+    okm::terminated ta(a, alen), tb(b, blen);
+    if (!ta.ok || !tb.ok) return kal_err_invalid;
+    if (refused_write(t2)) return kal_err_permission;
+    okm::kstat64 st{};
+    const okm_long s = okm::sys(okm::nr_fstatat64, f, reinterpret_cast<okm_long>(ta.buf),
+                                reinterpret_cast<okm_long>(&st), okm::at_symlink_nofollow);
+    if (okm::failed(s)) return okm::translate(s);
+    if ((okm::stat_mode(st) & okm::s_ifmt) == okm::s_ifdir) return kal_err_is_directory;
+    const okm_long r = okm::sys(okm::nr_linkat, f, reinterpret_cast<okm_long>(ta.buf),
+                                t2, reinterpret_cast<okm_long>(tb.buf), 0);
+    if (r == -okm::e_xdev) return kal_err_not_supported;
+    if (okm::failed(r)) return okm::translate(r);
+    wrote(t2, b, blen);
     return kal_ok;
 }
 

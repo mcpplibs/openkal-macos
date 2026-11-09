@@ -14,18 +14,12 @@ import openkal.space;
 import openkal.process;
 import openkal.stream;
 import openkal.abort;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
-int failures = 0;
-void check(bool ok, const char* what) {
-    if (ok) return;
-    ++failures;
-    const char pre[] = "FAIL: ";
-    kal::write(kal::err(), pre, sizeof(pre) - 1);
-    kal_uintptr n = 0; while (what[n]) ++n;
-    kal::write(kal::err(), what, n);
-    kal::write(kal::err(), "\n", 1);
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 
 volatile int g_ran = 0;
 void ran(void*) { g_ran = 1; }
@@ -43,7 +37,7 @@ void in_the_copy(void*) {
 alignas(16) unsigned char g_stack[64 * 1024];
 }
 
-int main() {
+UTest conformance_space_task_test{"conformance_space_task", [] {
     for (int round = 0; round < 3; ++round) {
         kal_process p{};
         const int rc = kal_space_start(in_the_copy, nullptr, g_stack + sizeof g_stack, &p);
@@ -59,6 +53,4 @@ int main() {
             kal::write(kal::err(), line, sizeof line - 1);
         }
     }
-    if (failures == 0) kal::write(kal::out(), "openkal-macos: a copy of the space starts contexts\n", 51);
-    return failures == 0 ? 0 : 1;
-}
+}};

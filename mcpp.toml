@@ -1,7 +1,7 @@
 [package]
 namespace   = "mcpplibs"
 name        = "openkal-macos"
-version     = "0.22.1"
+version     = "0.23.0"
 description = "An implementation of openkal for macOS, written on the kernel's own calls. Its purpose is as much to test the specification as to be used."
 license     = "Apache-2.0"
 
@@ -61,7 +61,7 @@ provides-interfaces = [
 ]
 
 [dependencies]
-openkal = "^0.24.0"
+openkal = "0.25.0"
 
 [build]
 # The flags are attached to this package's own sources rather than to the whole
@@ -113,3 +113,9 @@ default = []
 # library defines --- which is the only name reachable from a program that
 # defines every ordinary one.
 standalone = { defines = ["OKM_STANDALONE"] }
+
+# The tests are written with the mtest library (mcpp-community/mtest): each file
+# declares its cases, and a test that starts a copy of itself declares what the
+# copy does as a `child'.
+[dev-dependencies]
+mcpplibs.mtest = "0.5.2"

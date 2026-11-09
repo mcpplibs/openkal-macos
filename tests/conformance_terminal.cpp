@@ -14,18 +14,12 @@
 import openkal.types;
 import openkal.stream;
 import openkal.terminal;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
-int failures = 0;
-void check(bool ok, const char* what) {
-    if (ok) return;
-    ++failures;
-    const char pre[] = "FAIL: ";
-    kal::write(kal::err(), pre, sizeof(pre) - 1);
-    kal_uintptr n = 0; while (what[n]) ++n;
-    kal::write(kal::err(), what, n);
-    kal::write(kal::err(), "\n", 1);
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 
 constexpr kal_uintptr kRaw = kal::terminal::pass_control.bits;   // line assembly and echo off
 constexpr tcflag_t kAlters = ISTRIP | INLCR | IGNCR | ICRNL;
@@ -43,11 +37,10 @@ int deliver(int master, kal_stream s, const char* in, int n, unsigned char* out)
 }
 }
 
-int main() {
+UTest conformance_terminal_test{"conformance_terminal", [] {
     const int master = posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0) {
-        kal::write(kal::err(), "no pseudo terminal; not observed\n", 33);
-        return 0;
+        skip("no pseudo terminal; not observed");
     }
     const int slave = open(ptsname(master), O_RDWR | O_NOCTTY);
     check(slave >= 0, "the pseudo terminal opens");
@@ -101,6 +94,4 @@ int main() {
           "with line assembly on, the carriage return is part of the line");
 
     close(slave); close(master);
-    if (failures == 0) kal::write(kal::out(), "openkal-macos: the terminal's alteration of input\n", 51);
-    return failures == 0 ? 0 : 1;
-}
+}};
