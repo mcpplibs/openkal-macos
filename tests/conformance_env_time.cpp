@@ -3,17 +3,21 @@
 // `_NSGetExecutablePath' and `realpath' are the system's own, declared without
 // its headers as tests/conformance_spawn.cpp declares them: this test starts
 // itself again by its name.
+#include <string>
+#include <vector>
 import openkal.env;
 import openkal.time;
 import openkal.stream;
 import openkal.process;
 import openkal.fs;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 extern "C" int   _NSGetExecutablePath(char* buf, unsigned* size);
 extern "C" char* realpath(const char* path, char* resolved);
 
 namespace {
-int failures = 0;
 
 // ASKED BEFORE THIS IMPLEMENTATION'S INITIALISER RAN (0.21.3). This format runs
 // initialisers in link order, and this test's objects precede the package's: a
@@ -38,20 +42,7 @@ kal_u64 processor_ns() {
     return ok ? info.cpu_ns : ~0ull;
 }
 
-void check(bool ok, const char* what) {
-    if (ok) return;
-    ++failures;
-    const char pre[] = "FAIL: ";
-    kal::write(kal::err(), pre, sizeof(pre) - 1);
-    kal_uintptr n = 0; while (what[n]) ++n;
-    kal::write(kal::err(), what, n);
-    kal::write(kal::err(), "\n", 1);
-}
-
-bool is(const char* a, const char* b) {
-    while (*a && *a == *b) { ++a; ++b; }
-    return *a == *b;
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 
 // The granularity another start of this program states, or -1.
 kal_duration granularity_elsewhere() {
@@ -62,12 +53,14 @@ kal_duration granularity_elsewhere() {
         kal_dir d{}; char n[8]; kal_uintptr l = 0;
         if (kal_fs_preopen(i, &d, n, sizeof n, &l) == kal_ok && l == 1 && n[0] == '/') root = d;
     }
-    const char* argv[2] = { "conformance_env_time", "--granularity" };
-    const kal_uintptr lens[2] = { 20, 13 };
+    const std::vector<std::string> command = child_command("granularity");
+    std::vector<const char*> argv;
+    std::vector<kal_uintptr> lens;
+    for (const auto& a : command) { argv.push_back(a.c_str()); lens.push_back(a.size()); }
     const kal_spawn how{ root, kal::fs::working(), nullptr, nullptr, 0, 0 };
     kal_process p{};
     kal_uintptr n = 0; while (self[1 + n]) ++n;
-    if (kal_process_spawn(&how, self + 1, n, argv, lens, 2, nullptr, nullptr, 0, nullptr, &p) != kal_ok)
+    if (kal_process_spawn(&how, self + 1, n, argv.data(), lens.data(), argv.size(), nullptr, nullptr, 0, nullptr, &p) != kal_ok)
         return ~0ull;
     int status = -1, terminated = -1;
     kal_process_wait(p, &status, &terminated);
@@ -76,12 +69,13 @@ kal_duration granularity_elsewhere() {
 }
 }
 
-int main(int argc, char** argv) {
-    // The other start of granularity_elsewhere: its granularity as its status.
-    if (argc > 1 && is(argv[1], "--granularity")) {
-        const kal_duration g = kal::time::granularity();
-        return g < 250 ? static_cast<int>(g) : 250;
-    }
+// The other start of granularity_elsewhere: its granularity as its status.
+child granularity{"granularity", [](std::vector<std::string>) {
+    const kal_duration g = kal::time::granularity();
+    return g < 250 ? static_cast<int>(g) : 250;
+}};
+
+UTest conformance_env_time_test{"conformance_env_time", [] {
     // A program always receives the name it was started with, even where the
     // environment has none, in which case it is empty rather than absent.
     check(kal::env::arg_count() >= 1, "at least the program name is present");
@@ -134,5 +128,4 @@ int main(int argc, char** argv) {
 
     const char ok[] = "openkal-macos: env and time conformance\n";
     kal::write(kal::out(), ok, sizeof(ok) - 1);
-    return failures == 0 ? 0 : 1;
-}
+}};

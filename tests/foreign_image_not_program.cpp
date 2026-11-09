@@ -15,12 +15,12 @@
 import openkal.types;
 import openkal.fs;
 import openkal.process;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
-int failures = 0;
-void check(bool held, const char* what) {
-    if (!held) { std::printf("FAIL: %s\n", what); ++failures; }
-}
+void check(bool held, const char* what) { expect(held) << what; }
 
 kal_dir root() {
     for (kal_uintptr i = 0; i < kal_fs_preopen_count(); ++i) {
@@ -57,7 +57,7 @@ bool place(char* path, const unsigned char* bytes, std::size_t n) {
 }
 }  // namespace
 
-int main() {
+UTest foreign_image_not_program_test{"foreign_image_not_program", [] {
     // mach_header_64: magic, a processor type no machine has, a subtype, MH_EXECUTE.
     const unsigned char foreign[32] = {
         0xcf, 0xfa, 0xed, 0xfe,   0x45, 0x23, 0x01, 0x00,
@@ -75,7 +75,4 @@ int main() {
     // A file with no `#!' and no image header: the kernel's ENOEXEC.
     check(e == kal_err_not_program, "a file that is no image is not a program");
     ::unlink(plain);
-
-    if (failures == 0) std::printf("openkal-macos: a file this machine cannot start is not a program\n");
-    return failures == 0 ? 0 : 1;
-}
+}};

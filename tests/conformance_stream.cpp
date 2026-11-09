@@ -6,25 +6,17 @@
 // omitted, and it is the half that keeps a capability claim from diverging from
 // the code behind it.
 import openkal.stream;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
 
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    if (!ok) {
-        ++failures;
-        const char pre[] = "FAIL: ";
-        kal::write(kal::err(), pre, sizeof(pre) - 1);
-        kal_uintptr n = 0; while (what[n] != '\0') ++n;
-        kal::write(kal::err(), what, n);
-        kal::write(kal::err(), "\n", 1);
-    }
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 
 }  // namespace
 
-int main() {
+UTest conformance_stream_test{"conformance_stream", [] {
     // The standard streams are distinct and usable.
     check(kal::in().h  != kal::out().h, "stdin and stdout are distinct");
     check(kal::out().h != kal::err().h, "stdout and stderr are distinct");
@@ -51,6 +43,4 @@ int main() {
     // program, by comparing the exported names of the implementation against
     // the specification's list. Version 0.2 defines no optional operation, so
     // there is nothing here for a compile-time assertion to check.
-
-    return failures == 0 ? 0 : 1;
-}
+}};

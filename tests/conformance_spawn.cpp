@@ -5,7 +5,7 @@
 // the claim is about the started image and not about the caller. Two programs
 // are used. `/bin/sh' needs nothing to survive the start, so any descriptor
 // above 2 it holds was conveyed by the start. This test itself, started again
-// with `--grant-child', reads its preopens through `kal_fs_preopen', which is
+// as the child `grant', reads its preopens through `kal_fs_preopen', which is
 // how a granted directory is defined to arrive.
 //
 // The three names declared below are the system's own and are reached without
@@ -13,18 +13,21 @@
 // program on this system learns where it is, and `realpath' makes that a name
 // the root preopen can resolve. `dup2' places a descriptor WITHOUT the
 // close-on-exec flag, which is the descriptor a caller inherits and did not grant.
+#include <string>
+#include <vector>
 import openkal.types;
 import openkal.fs;
 import openkal.stream;
 import openkal.process;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 extern "C" int   _NSGetExecutablePath(char* buf, unsigned* size);
 extern "C" char* realpath(const char* path, char* resolved);
 extern "C" int   dup2(int from, int to);
 
 namespace {
-
-int failures = 0;
 
 kal_uintptr len(const char* s) { kal_uintptr n = 0; while (s[n]) ++n; return n; }
 
@@ -36,11 +39,7 @@ bool same(const char* a, kal_uintptr n, const char* b) {
 
 void say(const char* s) { kal::write(kal::err(), s, len(s)); }
 
-void check(bool ok, const char* what) {
-    if (ok) return;
-    ++failures;
-    say("FAIL: "); say(what); say("\n");
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 
 const char kMarker[] = "okm-grant-marker";
 
@@ -65,24 +64,26 @@ bool write_marker(kal_dir d, const char* text) {
 
 // --- the started side --------------------------------------------------------
 //
-// argv: --grant-child <count|ambient> {<name> <expect>}
+// arguments: <count|ambient> {<name> <expect>}
 // <expect> is the content of the marker file in that directory, or `@<entry>'
 // for a directory entry that must exist there. The status names the first
 // disagreement, so that a failure in the caller says which one it was.
-int grant_child(char** argv) {
+int grant_child(const std::vector<std::string>& argv) {
     const kal_uintptr n = kal_fs_preopen_count();
-    if (same(argv[2], len(argv[2]), "ambient")) {
+    if (argv.empty()) return 90;
+    if (argv[0] == "ambient") {
         kal_dir d{}; char nm[8]; kal_uintptr l = 0;
         if (n != 2) return 10;
         if (kal_fs_preopen(1, &d, nm, sizeof nm, &l) != kal_ok || l != 1 || nm[0] != '/') return 11;
         return 0;
     }
     kal_uintptr want = 0;
-    for (const char* c = argv[2]; *c; ++c) want = want * 10 + static_cast<kal_uintptr>(*c - '0');
+    for (const char* c = argv[0].c_str(); *c; ++c) want = want * 10 + static_cast<kal_uintptr>(*c - '0');
+    if (argv.size() != 1 + 2 * want) return 91;
     if (n != want) return 20;
     for (kal_uintptr i = 0; i < want; ++i) {
-        const char* name = argv[3 + 2 * i];
-        const char* expect = argv[4 + 2 * i];
+        const char* name = argv[1 + 2 * i].c_str();
+        const char* expect = argv[2 + 2 * i].c_str();
         kal_dir d{}; char nm[256]; kal_uintptr l = 0;
         if (kal_fs_preopen(i, &d, nm, sizeof nm, &l) != kal_ok) return 30 + static_cast<int>(i);
         if (!same(nm, l, name)) return 40 + static_cast<int>(i);
@@ -104,6 +105,8 @@ int grant_child(char** argv) {
     return 0;
 }
 
+child grant{"grant", [](std::vector<std::string> args) { return grant_child(args); }};
+
 // --- the starting side -------------------------------------------------------
 
 char g_self[1024];
@@ -113,15 +116,16 @@ char g_self[1024];
 int run_child(const kal_preopen* grants, kal_uintptr count,
               const char* const* args, kal_uintptr nargs,
               const char** envp = nullptr, kal_uintptr envc = 0) {
-    const char* argv[16] = { "conformance_spawn", "--grant-child" };
-    kal_uintptr lens[16] = { 17, 13 };
-    for (kal_uintptr i = 0; i < nargs; ++i) { argv[2 + i] = args[i]; lens[2 + i] = len(args[i]); }
+    const std::vector<std::string> command = child_command("grant", std::vector<std::string>(args, args + nargs));
+    std::vector<const char*> argv;
+    std::vector<kal_uintptr> lens;
+    for (const auto& x : command) { argv.push_back(x.c_str()); lens.push_back(x.size()); }
     kal_uintptr elens[4] = {};
     for (kal_uintptr i = 0; i < envc; ++i) elens[i] = len(envp[i]);
     const kal_spawn how{ root(), working(), nullptr, grants, count, 0 };
     kal_process p{};
     const char* rel = g_self + 1;
-    if (kal_process_spawn(&how, rel, len(rel), argv, lens, 2 + nargs,
+    if (kal_process_spawn(&how, rel, len(rel), argv.data(), lens.data(), argv.size(),
                           envp, elens, envc, nullptr, &p) != kal_ok)
         return -1;
     int status = -1, terminated = -1;
@@ -132,9 +136,7 @@ int run_child(const kal_preopen* grants, kal_uintptr count,
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc > 2 && same(argv[1], len(argv[1]), "--grant-child")) return grant_child(argv);
-
+UTest conformance_spawn_test{"conformance_spawn", [] {
     char raw[1024]; unsigned size = sizeof raw;
     const bool named = _NSGetExecutablePath(raw, &size) == 0 && realpath(raw, g_self) != nullptr;
     check(named && g_self[0] == '/' && g_self[1] != '\0', "the test can name its own program");
@@ -252,5 +254,4 @@ int main(int argc, char** argv) {
     kal_fs_remove(working(), db, len(db));
 
     say("openkal-macos: what a started program receives\n");
-    return failures == 0 ? 0 : 1;
-}
+}};

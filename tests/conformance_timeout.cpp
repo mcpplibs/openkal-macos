@@ -12,10 +12,11 @@ import openkal.types;
 import openkal.stream;
 import openkal.process;
 import openkal.timeout;
+import mcpplibs.mtest;
+
+using namespace mcpplibs::mtest;
 
 namespace {
-
-int failures = 0;
 
 void say(const char* s) {
     kal_uintptr n = 0; while (s[n]) ++n;
@@ -29,11 +30,7 @@ void say_num(int v) {
     kal::write(kal::err(), b + i, static_cast<kal_uintptr>(12 - i));
 }
 
-void check(bool ok, const char* what) {
-    if (ok) return;
-    ++failures;
-    say("FAIL: "); say(what); say("\n");
-}
+void check(bool ok, const char* what) { expect(ok) << what; }
 
 // WHY SIXTEEN CHANNELS AND NOT ONE. Under the defect the wait was performed upon
 // descriptor N-1, and whether that expires depends on what occupies N-1. For a
@@ -116,10 +113,7 @@ void the_rest_of_the_interface() {
 
 }  // namespace
 
-int main() {
+UTest conformance_timeout_test{"conformance_timeout", [] {
     bounded_transfer_waits_on_the_stream();
     the_rest_of_the_interface();
-
-    if (failures == 0) say("openkal-macos: timeout conformance\n");
-    return failures == 0 ? 0 : 1;
-}
+}};

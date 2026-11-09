@@ -113,3 +113,9 @@ default = []
 # library defines --- which is the only name reachable from a program that
 # defines every ordinary one.
 standalone = { defines = ["OKM_STANDALONE"] }
+
+# The tests are written with the mtest library (mcpp-community/mtest): each file
+# declares its cases, and a test that starts a copy of itself declares what the
+# copy does as a `child'.
+[dev-dependencies]
+mcpplibs.mtest = "0.5.2"
