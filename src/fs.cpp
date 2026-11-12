@@ -517,19 +517,15 @@ void kal_fs_close_dir(kal_dir d) {
     // directory whose enumerations are not this one's.
     listings_end(fd);
     okm::rights::forget(fd);
-    okm::retire(d.h); okm::sys(okm::nr_close, fd);
+    okm::release(d.h);
 }
 
-void kal_fs_close_file(kal_file f) {
-    const int fd = okm::unpack(f.h);
-    if (fd >= 0) { okm::retire(f.h); okm::sys(okm::nr_close, fd); }
-}
+void kal_fs_close_file(kal_file f) { okm::release(f.h); }
 
 kal_uintptr kal_fs_max_name(void) { return okm::max_name; }
 
 kal_stream kal_fs_stream(kal_file f) {
-    const int fd = okm::unpack(f.h);
-    return kal_stream{ fd < 0 ? 0u : static_cast<kal_uintptr>(fd) };
+    return kal_stream{ okm::stream_word(f.h) };
 }
 
 int kal_fs_seek(kal_file f, kal_i64 offset, int whence, kal_u64* result) {

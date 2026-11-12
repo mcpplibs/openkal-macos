@@ -137,12 +137,7 @@ kal_intptr kal_datagram_recv_from(kal_datagram d, void* buf, kal_uintptr len,
     }
 }
 
-void kal_datagram_close(kal_datagram d) {
-    const int fd = fd_of(d);
-    if (fd < 0) return;
-    okm::sys(okm::nr_close, fd);
-    okm::retire(d.h);
-}
+void kal_datagram_close(kal_datagram d) { okm::release(d.h); }
 
 // Broadcast is not claimed. The kernel provides it only after SO_BROADCAST has
 // been set, and this interface has no operation that would set it; a word

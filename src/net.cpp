@@ -200,8 +200,7 @@ kal_stream kal_net_stream(kal_net_conn c) {
     // The bare descriptor, for the reason kal_fs_stream gives: openkal.stream's
     // operations take whatever the environment's transfer calls take, and a
     // packed word is not that.
-    const int fd = fd_of(c);
-    return kal_stream{ fd < 0 ? 0u : static_cast<kal_uintptr>(fd) };
+    return kal_stream{ okm::stream_word(c.h) };
 }
 
 int kal_net_peer(kal_net_conn c, kal_endpoint* out) {
@@ -237,19 +236,9 @@ int kal_net_shutdown(kal_net_conn c, int direction) {
     return kal_ok;
 }
 
-void kal_net_close(kal_net_conn c) {
-    const int fd = fd_of(c);
-    if (fd < 0) return;
-    okm::sys(okm::nr_close, fd);
-    okm::retire(c.h);
-}
+void kal_net_close(kal_net_conn c) { okm::release(c.h); }
 
-void kal_net_close_listener(kal_net_listener l) {
-    const int fd = fd_of(l);
-    if (fd < 0) return;
-    okm::sys(okm::nr_close, fd);
-    okm::retire(l.h);
-}
+void kal_net_close_listener(kal_net_listener l) { okm::release(l.h); }
 
 // Both positions hold on this kernel: it speaks IPv6 and its `shutdown' ends
 // transfer in one direction while the other continues.

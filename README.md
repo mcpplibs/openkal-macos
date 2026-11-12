@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.25.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.0"
+openkal-macos = "0.23.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -182,6 +182,26 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.23.1 corrects
+
+**A handle is retired before its descriptor is closed.** A connection, a listener
+and a datagram socket were closed first and retired second. The kernel gives a
+closed number to the next open in any context, so a file opened by another context
+between the two took the number with the generation the socket's handle still had,
+and the retire then made the file's handle stale: its stream was answered as zero,
+which is standard input, its reads returned nothing of the file, and its descriptor
+was never closed (openkal-linux#53; this implementation has the same construction).
+Every release is now one function, which retires and then closes.
+
+**One release closes.** The generation is advanced by a compare-and-exchange from
+the value the handle carries, so a second release of the same word, in the same
+context or another, closes nothing. It is read and advanced through the atomic
+operations.
+
+**A released handle's stream is no stream.** `kal_fs_stream` and `kal_net_stream`
+answer a handle that names no live descriptor with a word no descriptor has, and a
+transfer upon it reports `kal_err_invalid`. They answered zero.
 
 ## What 0.23 adds (openkal 0.25)
 
