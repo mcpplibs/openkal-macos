@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.25.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.1"
+openkal-macos = "0.23.2"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -182,6 +182,13 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.23.2 corrects
+
+The manifest declares `openkal = "^0.25.0"`. An implementation written against a
+patch release of the specification conforms to every later patch of that minor
+version (openkal clause 8); with an exact version, a consumer that names openkal
+0.25.1 could not resolve with this implementation.
 
 ## What 0.23.1 corrects
 
