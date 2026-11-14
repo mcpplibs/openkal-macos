@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.25.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.2"
+openkal-macos = "0.23.3"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -182,6 +182,17 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.23.3 corrects
+
+**The stub of `libSystem` is supplied only when the link has no SDK.** A build
+for this system with a target requested (`mcpp build --target aarch64-macos`) on
+a Mac put `port/` on the link, ahead of the SDK that mcpp has named there since
+2026.8.25.2, and the three names of the stub shadowed the SDK's complete library
+(`undefined symbol: strlen`). The build program now asks mcpp's
+`MCPP_TARGET_SDK` (2026.11.14.1+), the SDK the link names, and supplies the stub
+when a target was requested and that is empty: a cross link from another host.
+An older mcpp sets no such variable, and the condition is then the previous one.
 
 ## What 0.23.2 corrects
 
