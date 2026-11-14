@@ -54,42 +54,37 @@ import std;
 // links against it just as well and names the same library.
 
 int main() {
-    // THE CONDITION IS NOT "WHICH MACHINE", AND THE FIRST TWO ATTEMPTS AT
-    // IT BOTH WERE.
+    // THE QUESTION IS WHETHER THE SYSTEM'S OWN STUB IS ON THE LINK, AND mcpp
+    // ANSWERS IT: `MCPP_TARGET_SDK` names the SDK the link carries with
+    // `-isysroot`, and is empty when the link names none (mcpp 2026.11.14.1+).
+    // Ours is supplied exactly when a target was requested and no SDK is on
+    // the link — a cross link to this system from another host.
     //
-    // Attempt one supplied the stub always, and on this system it SHADOWED the
-    // vendor's — which lists every name rather than three (see above).
-    // Attempt two asked whether the host was this system, and that failed the
-    // other way: `mcpp build --target aarch64-macos` ON a Mac is a build whose
-    // target side comes from the graph, and the build tool deliberately keeps
-    // this machine's SDK off such a link. The vendor's stub was then not there
-    // either, and neither was ours:
+    // THE THREE ATTEMPTS BEFORE THIS ONE EACH ASKED A NEIGHBOURING QUESTION.
+    //
+    // Always: the stub shadowed the vendor's on this system (above).
+    // The host: `mcpp build --target aarch64-macos` ON a Mac then had no
+    // `libSystem` at all, because mcpp kept the SDK off such a link for one
+    // day (2026-08-24):
     //
     //     ld64.lld: error: library not found for -lSystem
-    //     ld64.lld: error: undefined symbol: clock_gettime_nsec_np
-    //     ld64.lld: error: undefined symbol: pthread_create_from_mach_thread
     //
-    // The fact that decides it is whether the build was POINTED AT A TARGET.
-    // When it was, the tool supplies no system of its own and this package is
-    // the only thing that can name one. When it was not — a native build, which
-    // is what this package's own conformance suite does — the SDK is on the
-    // link and is the complete answer.
-    // `MCPP_TARGET_REQUESTED` AND NOT `MCPP_TARGET`. The second is filled in
-    // with the host when nobody named a target, so it is never empty and the
-    // test was always true — which put this stub on a NATIVE link, where the
-    // SDK's complete one was already there and ours shadowed it:
+    // A requested target (`MCPP_TARGET_REQUESTED`, which is empty on a native
+    // build, unlike `MCPP_TARGET`): right for that day's mcpp, and wrong from
+    // the next, which kept `-isysroot` on every link of this system's format on
+    // a Mac (2026.8.25.2). The stub was put ahead of the SDK's and shadowed it
+    // again, on a Mac with `--target` only — a case no build here exercised
+    // until mcpp's canary `cxx aarch64-macos test` (2026-11-14):
     //
-    //     ld64.lld: error: undefined symbol: wcslen / strtoul / __error
+    //     ld64.lld: error: undefined symbol: strlen / memcpy / pthread_create
     //
-    // The first is the value unfilled: empty exactly when this is an ordinary
-    // native build. See mcpp's `build_program.cppm` for why the two are
-    // different questions even when the triples are equal.
+    // Each was a proxy for the fact; the fact is the tool's to state.
     //
-    // An mcpp too old to set it leaves it empty, and that is the right answer
-    // for such a build tool: it has no graph-supplied target side, so the
-    // system is always on the link.
+    // An mcpp too old to set `MCPP_TARGET_SDK` leaves it empty, and the
+    // condition is then the previous one: such a build behaves as it did.
     const char* requested = std::getenv("MCPP_TARGET_REQUESTED");
-    if (requested && *requested)
+    const char* sdk = std::getenv("MCPP_TARGET_SDK");
+    if (requested && *requested && !(sdk && *sdk))
         mcpp::link_search("port");
     mcpp::rerun_if_changed("port/libSystem.tbd");
     return 0;

@@ -27,7 +27,7 @@ on:
         default: ""
 env:
   MCPP_SOURCE_REF: ${{ github.event.inputs.mcpp_ref || vars.MCPP_SOURCE_REF }}
-  MCPP_VERSION: 2026.11.9.1
+  MCPP_VERSION: 2026.11.14.1
   XLINGS_VERSION: v2026.10.26.1
   # The mtest engine the runs are reported with: the conformance suite's cases
   # (tools/run-conformance.sh with MTEST set) and `mcpp test`'s store (target/mtest).
@@ -255,6 +255,23 @@ jobs:
           test "$missing" -eq 0
           done
 
+      # AND WITH THE TARGET REQUESTED, which is a different link on this
+      # machine. The steps above build natively, where no target is requested
+      # and the stub of `libSystem` was never supplied; `--target aarch64-macos`
+      # here is the build in which it was, ahead of the SDK the link carries
+      # (0.23.3, `undefined symbol: strlen`). The SDK must answer, so this
+      # needs an mcpp that states it (`MCPP_TARGET_SDK`, 2026.11.14.1+).
+      - name: This package's own tests, the target requested
+        run: |
+          set -euo pipefail
+          mcpp test --target aarch64-macos 2>&1 | tee tests-target.log
+          missing=0
+          for f in tests/*.cpp; do
+            name="$(basename "$f" .cpp)"
+            grep -q "^$name \.\.\. ok" tests-target.log || { echo "did not run or did not pass: $name (--target)" >&2; missing=1; }
+          done
+          test "$missing" -eq 0
+
       - name: This package's test runs, kept for the report
         if: always()
         run: |
@@ -460,8 +477,8 @@ jobs:
       - name: The failing cases, explained
         if: failure()
         run: |
-          [ -n "${MTEST:-}" ] && [ -d .spec/conformance/.mtest ] || exit 0
-          ( cd .spec/conformance && "$MTEST" explain ) || true
+          [ -n "${MTEST:-}" ] && [ -d .spec/tests/cts/.mtest ] || exit 0
+          ( cd .spec/tests/cts && "$MTEST" explain ) || true
 
       # THE RUNS OF THIS JOB, REPORTED: the conformance suite's (one case per
       # interface, its observations within it) and `mcpp test`'s (one case per
@@ -473,7 +490,7 @@ jobs:
           [ -n "${MTEST:-}" ] || { echo "no mtest engine in this job"; exit 0; }
           store="$(cygpath -u "$RUNNER_TEMP" 2> /dev/null || printf '%s' "$RUNNER_TEMP")/mtest-store"
           mkdir -p "$store"; here="$PWD"
-          for from in "$here/.spec/conformance/.mtest" "$RUNNER_TEMP/mcpp-test-runs"; do
+          for from in "$here/.spec/tests/cts/.mtest" "$RUNNER_TEMP/mcpp-test-runs"; do
             if [ -f "$from/index.ndjson" ]; then ( cd "$store" && "$MTEST" store import --from "$from" ); fi
           done
           [ -f "$store/.mtest/index.ndjson" ] || { echo "no run was kept"; exit 0; }
