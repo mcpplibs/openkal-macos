@@ -506,6 +506,79 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
+  # x86_64 WITHOUT AN SDK (0.23.4): a release build of a program above this
+  # package, linked on Linux for x86_64-macos-musl through openkal-platform's
+  # hosted arrangement (the stub of libSystem supplied, no SDK on the link), and
+  # run on an Intel Mac. Clang lowers a zeroing `memset' to `__bzero' on that
+  # architecture, which the stub did not list (undefined symbol: __bzero).
+  x86_64-no-sdk-link:
+    name: x86_64, linked with no SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: openkal-macos }
+      - name: Install xlings and mcpp
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/openxlings/xlings/main/tools/other/quick_install.sh | bash -s "$XLINGS_VERSION"
+          echo "$HOME/.xlings/subos/current/bin" >> "$GITHUB_PATH"
+      - name: mcpp
+        run: |
+          for attempt in 1 2 3 4 5; do
+            xlings update > /dev/null 2>&1 || true
+            xlings install "mcpp@$MCPP_VERSION" -y -g && break
+            [ "$attempt" = 5 ] && { echo "::error::mcpp could not be installed"; exit 1; }
+            sleep 60
+          done
+          mcpp self config --mirror GLOBAL
+      - name: A release build, this package as the kernel-abi layer
+        run: |
+          set -euo pipefail
+          mkdir -p probe/src
+          cat > probe/mcpp.toml <<'TOML'
+          [package]
+          name = "zeroing"
+          version = "0.1.0"
+          [targets.zeroing]
+          kind = "bin"
+          main = "src/main.c"
+          [target.x86_64-macos-musl]
+          platform = "openkal-platform@0.28.0"
+          [target.x86_64-macos-musl.layers]
+          kernel-abi = { path = "../openkal-macos" }
+          TOML
+          cat > probe/src/main.c <<'C'
+          #include <stdio.h>
+          #include <string.h>
+          int main(int argc, char **argv) {
+              char b[256];
+              memset(b, 0, sizeof b);
+              snprintf(b, sizeof b, "zeroed, %d argument(s)", argc - 1);
+              puts(b);
+              return 0;
+          }
+          C
+          cd probe
+          mcpp build --release --target x86_64-macos-musl 2>&1 | tee build.log
+          grep -q 'openkal-macos@0.23.4' build.log || { echo "::error::the working tree was not the kernel-abi layer"; exit 1; }
+          mkdir -p ../out && cp "$(find target -name zeroing -type f | head -1)" ../out/
+      - uses: actions/upload-artifact@v4
+        with: { name: zeroing-x86_64, path: out/ }
+
+  x86_64-no-sdk-run:
+    name: x86_64, run on an Intel Mac
+    needs: x86_64-no-sdk-link
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: zeroing-x86_64, path: out }
+      - name: Run
+        run: |
+          chmod +x out/zeroing
+          test "$(out/zeroing one two)" = "zeroed, 2 argument(s)"
+
+  # ---------------------------------------------------------------------------
   # EVERY JOB'S RUNS AS ONE REPORT (`mtest ci report`, the workflow run's group).
   report:
     name: tests (report)
