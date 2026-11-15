@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.25.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.3"
+openkal-macos = "0.23.4"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -182,6 +182,16 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.23.4 corrects
+
+**The stub of `libSystem` lists `__bzero` for x86_64.** Clang lowers a zeroing
+`memset` to `__bzero` on this system's x86_64, and this package's objects carry
+such stores in a release build. A link with no SDK --- the cross link that the
+stub serves --- therefore stopped at `undefined symbol: __bzero`, so a release
+build for `x86_64-macos-musl` failed for every program. The stub now lists the
+name for x86_64, and the program binds it to the system's library when it runs.
+CI links such a program on Linux and runs it on an Intel Mac.
 
 ## What 0.23.3 corrects
 

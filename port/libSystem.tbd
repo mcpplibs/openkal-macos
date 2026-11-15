@@ -67,6 +67,14 @@ current-version: 1351.0.0
 # stops with `undefined symbol: dyld_stub_binder, referenced by lazy binding'.
 # The first measurement was made with one version, and one version is not
 # evidence about a format.
+#
+# `___bzero' (0.23.4), for x86_64 only, is of the same kind: no source here
+# names it. Clang lowers a zeroing `memset' to it on this system's x86_64
+# (Darwin's library call for the operation), and this package's own objects
+# carry such stores (src/process.cpp, src/fs.cpp in a release build). A link
+# with no SDK therefore stopped at `undefined symbol: __bzero'. AArch64 has no
+# such lowering. Measured by linking a release build of a program above
+# openkal for x86_64-macos-musl on Linux; its one new import is this name.
 exports:
   - targets:     [ arm64-macos, x86_64-macos ]
     symbols:     [ __dyld_atfork_parent, __dyld_atfork_prepare, __dyld_fork_child,
@@ -80,4 +88,6 @@ exports:
                    __pthread_self, dyld_stub_binder,
                    _mach_task_self_, _mach_vm_protect, _sandbox_init_with_parameters,
                    __NSGetArgc, __NSGetArgv, __NSGetEnviron ]
+  - targets:     [ x86_64-macos ]
+    symbols:     [ ___bzero ]
 ...
