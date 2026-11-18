@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.25.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.4"
+openkal-macos = "0.23.5"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -182,6 +182,17 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.23.5 corrects
+
+**A part of `fork` the library does not export is not called.** Starting a context
+(`kal_space_start`, and a confined start) calls the parts of the library's own `fork`
+by their names: dyld's, the allocator's, the C library's and the thread library's
+handlers. They were ordinary imports, so a system built from the same sources whose
+library does not export every one of them did not start the program at all (measured
+on PureDarwin 26.5: `dyld: Symbol not found: __pthread_atfork_prepare`, expected in
+`/usr/lib/libSystem.B.dylib`). Each is now a weak import, called when it is bound. On
+macOS every one is bound and nothing changes.
 
 ## What 0.23.4 corrects
 

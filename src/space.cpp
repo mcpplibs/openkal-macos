@@ -44,32 +44,42 @@ extern "C" {
 // in this ecosystem defines, so it is reachable beneath one as above one. The
 // handlers a program registers with `pthread_atfork' are not run: a copy made
 // here is not a `fork' the program asked for.
-void _dyld_atfork_prepare(void);
-void _dyld_atfork_parent(void);
-void _dyld_fork_child(void);
-void _malloc_fork_prepare(void);
-void _malloc_fork_parent(void);
-void _malloc_fork_child(void);
-void _libc_fork_prepare(void);
-void _libc_fork_parent(void);
-void _libc_fork_child(void);
-void _pthread_atfork_prepare(void);
-void _pthread_atfork_parent(void);
-void _pthread_atfork_child(void);
-void _mach_fork_child(void);
+// EACH PART IS BOUND IF THE LIBRARY HAS IT (0.23.5). The names are the library's
+// own, between its parts, and a system built from the same sources need not
+// export every one of them from the library a program links (measured on
+// PureDarwin 26.5: `Symbol not found: __pthread_atfork_prepare', and the
+// program was not started at all). A part that is not there is not called: the
+// state it would have prepared is that part's, which a program that cannot
+// name the part did not reach either.
+#define OKM_PART __attribute__((weak_import))
+void _dyld_atfork_prepare(void) OKM_PART;
+void _dyld_atfork_parent(void) OKM_PART;
+void _dyld_fork_child(void) OKM_PART;
+void _malloc_fork_prepare(void) OKM_PART;
+void _malloc_fork_parent(void) OKM_PART;
+void _malloc_fork_child(void) OKM_PART;
+void _libc_fork_prepare(void) OKM_PART;
+void _libc_fork_parent(void) OKM_PART;
+void _libc_fork_child(void) OKM_PART;
+void _pthread_atfork_prepare(void) OKM_PART;
+void _pthread_atfork_parent(void) OKM_PART;
+void _pthread_atfork_child(void) OKM_PART;
+void _mach_fork_child(void) OKM_PART;
+#undef OKM_PART
 
 }  // extern "C"
 
 namespace {
 
+void part(void (*routine)(void)) { if (routine != nullptr) routine(); }
 void prepare() {
-    _dyld_atfork_prepare(); _malloc_fork_prepare(); _libc_fork_prepare(); _pthread_atfork_prepare();
+    part(_dyld_atfork_prepare); part(_malloc_fork_prepare); part(_libc_fork_prepare); part(_pthread_atfork_prepare);
 }
 void in_the_original() {
-    _pthread_atfork_parent(); _libc_fork_parent(); _malloc_fork_parent(); _dyld_atfork_parent();
+    part(_pthread_atfork_parent); part(_libc_fork_parent); part(_malloc_fork_parent); part(_dyld_atfork_parent);
 }
 void in_the_copy() {
-    _mach_fork_child(); _dyld_fork_child(); _pthread_atfork_child(); _malloc_fork_child(); _libc_fork_child();
+    part(_mach_fork_child); part(_dyld_fork_child); part(_pthread_atfork_child); part(_malloc_fork_child); part(_libc_fork_child);
 }
 
 }  // namespace
