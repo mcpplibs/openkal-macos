@@ -1326,16 +1326,9 @@ int kal_process_end_as_requested(void) {
     okm::sys(nr_sigaction, signo, reinterpret_cast<okm_long>(&act), 0);
     unsigned int set = 1u << (signo - 1);
     okm::sys(okm::nr_sigprocmask, 2 /* SIG_UNBLOCK */, reinterpret_cast<okm_long>(&set), 0);
+    // A signal a program sends itself, unblocked, is delivered before the call
+    // returns; the exit below is reached only if it was not.
     okm::sys(okm::nr_kill, okm::sys(okm::nr_getpid), signo);
-    // THE MOMENT IS WAITED FOR (0.24.1). The kernel gives a signal sent to the
-    // program to the first of its contexts that does not block it, which need
-    // not be the caller: called from another context, `kill' returned before
-    // the signal was delivered, and the exit below ended the program first, so
-    // its starter saw 143 where the request's own end was SIGTERM (measured:
-    // okrun 0.7.0, whose own context acts on the request, on macos-15 arm64).
-    // As openkal-linux, a tenth of a second; the exit is reached only if the
-    // signal was not delivered in it.
-    for (int i = 0; i < 100; ++i) kal_time_sleep(1000000ull);
     okm::sys(okm::nr_exit, 128 + signo);
 #endif
     for (;;) { }
