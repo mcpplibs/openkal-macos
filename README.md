@@ -8,7 +8,7 @@ written on the kernel's own calls.
 openkal = "0.26.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.24.0"
+openkal-macos = "0.24.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -197,6 +197,22 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.24.1 corrects
+
+**A request acted on by another context ends the program as the request.**
+`kal_process_end_as_requested` restores the request's default treatment, unblocks
+it and sends it to the program again; a program still there a moment later ends
+with the status a shell gives one so ended. The kernel gives a signal sent to the
+program to the first of its contexts that does not block it, which need not be
+the caller, and the moment was not waited for: called from a context other than
+the first, `kill` returned before the signal was delivered and the exit ended the
+program first, so its starter saw the status 143 where the request's own end was
+`SIGTERM` (measured: okrun 0.7.0, whose own context acts on the request, on the
+macos-15 arm64 runners). The call now waits up to a tenth of a second for the
+delivery, as openkal-linux does, before that exit.
+`tests/stop_word_and_sigpipe.cpp` runs twenty copies whose second context acts on
+the request while the first waits for it; each ends by `SIGTERM`.
 
 ## What 0.23.5 corrects
 
