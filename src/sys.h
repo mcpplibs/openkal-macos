@@ -270,7 +270,7 @@ struct kpollfd { int fd; short events; short revents; };
 
 // --- error values, as this kernel returns them -------------------------------
 enum : int {
-    e_perm = 1, e_noent = 2, e_intr = 4, e_io = 5, e_noexec = 8, e_badf = 9,
+    e_perm = 1, e_noent = 2, e_intr = 4, e_io = 5, e_2big = 7, e_noexec = 8, e_badf = 9,
     e_child = 10,
     e_again = 35, e_nomem = 12, e_acces = 13, e_fault = 14, e_busy = 16,
     e_exist = 17, e_xdev = 18, e_nodev = 19, e_notdir = 20, e_isdir = 21,
@@ -360,7 +360,9 @@ inline int translate(okm_long r) {
         case e_loop: case e_spipe:                       return 1;  // invalid
         case e_again:                                    return 2;  // again
         case e_nomem:                                    return 4;  // no memory
-        case e_nospc: case e_fbig: case e_dquot:         return 5;  // no space
+        // e_2big: a start whose arguments and environment exceed ARG_MAX
+        // (openkal 0.26, clause 7.6).
+        case e_nospc: case e_fbig: case e_dquot: case e_2big: return 5;  // no space
         case e_acces: case e_perm: case e_rofs:          return 6;  // permission
         case e_nosys: case e_opnotsupp: case e_notsup:   return 7;  // unsupported
         case e_pipe: case e_connreset:                   return 8;  // closed

@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.25.0"
+openkal = "0.26.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.5"
+openkal-macos = "0.24.0"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -22,6 +22,21 @@ The process interface provides the OpenKal 0.24 declared-unit operations.
 References retain the original process identity, birth and boot session.
 Retirement checks the live continuation before and after membership migration;
 ambiguity reports `unknown`. No process registry is installed.
+
+**What an observation answers (0.24.0, openkal 0.26, clause 7.18).** This kernel
+has one process space, so a reference names its boot session and nothing else.
+A reference of another boot session is `empty`, where `kal_process_job_open`
+refused it; one whose number a program of another start now holds is `empty`,
+where it was `unknown`: a number is given again only once no program holds it as
+its group. `KAL_PROCESS_PROP_JOB_OBSERVE` is claimed only where the boot session
+and the caller's start can be read. `tests/a_unit_reference_names_its_boot_session.cpp`.
+
+**A start is bounded by the kernel alone (0.24.0, openkal 0.26, clause 7.6).** An
+argument vector or an environment of more than 512 entries was refused and
+reported as `kal_err_no_memory`; the constant guarded no buffer. It is removed:
+the kernel bounds the bytes of both together (`ARG_MAX`), and its refusal
+(`E2BIG`) is reported as `kal_err_no_space`, where it was `kal_err_io`.
+`tests/a_start_is_bounded_by_the_kernel_alone.cpp`.
 
 **The confinement rules are as long as the grants make them (0.22.1).** The
 sandbox profile names each grant in the write rule and in the read rule. Its

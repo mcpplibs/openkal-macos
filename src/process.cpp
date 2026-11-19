@@ -32,7 +32,9 @@ namespace okm { extern bool g_pipe_ignored_here; }
 
 namespace {
 
-constexpr kal_uintptr kMaxEntries = 512;
+bool units_observable();   // defined beside the unit's reference (clause 7.18)
+
+
 
 // --- confinement (0.23): this system's sandbox ---------------------------------
 //
@@ -218,7 +220,6 @@ struct vector {
     bool   ok = true;
 
     bool build(const char** items, const kal_uintptr* lens, kal_uintptr n) {
-        if (n > kMaxEntries) { ok = false; return false; }
         okm_uptr total = 0;
         for (kal_uintptr i = 0; i < n; ++i) total += lens[i] + 1;
         slots_bytes = (n + 1) * sizeof(char*);
@@ -262,7 +263,6 @@ struct vector {
 
     bool build_env(const char** items, const kal_uintptr* lens, kal_uintptr n,
                    const kal_preopen* grants, kal_uintptr g, const conveyance& c) {
-        if (n > kMaxEntries) { ok = false; return false; }
         auto left_out = [&](const char* s, kal_uintptr l) {
             return names_preopens(s, l) || starts_with(s, l, kRights, kRightsLen)
                 || starts_with(s, l, kResources, kResourcesLen);
@@ -1424,7 +1424,9 @@ void kal_process_close(kal_process h) {
 // because `kal_process_spawn' above refuses every flag; STOP_REQUESTED is
 // claimed only where the trampoline it needs has been entered by a running
 // program, which is the architecture continuous integration executes.
-kal_uintptr kal_process_props(void) { return KAL_PROCESS_PROP_JOB_OBSERVE |
+// JOB_OBSERVE is claimed where a reference can be made (clause 7.18, 0.26):
+// where the boot session's name and this program's start can be read.
+kal_uintptr kal_process_props(void) { return (units_observable() ? KAL_PROCESS_PROP_JOB_OBSERVE : 0u) |
     KAL_PROCESS_PROP_TERMINATE | KAL_PROCESS_PROP_STREAM_PASSING
   | KAL_PROCESS_PROP_EXIT_STATUS
   | KAL_PROCESS_PROP_CHANNEL | KAL_PROCESS_PROP_GRANT_DIR
@@ -1448,6 +1450,18 @@ kal_uintptr kal_process_props(void) { return KAL_PROCESS_PROP_JOB_OBSERVE |
 
 // Observable units (openkal 0.24). The unit stays the kernel's own group;
 // identity validation does not create a registry or infer quiet from a leader.
+//
+// WHAT AN OBSERVATION CAN ESTABLISH (openkal 0.26, clause 7.18). This kernel
+// has one process space, so a reference names its boot session and nothing
+// else:
+//   another boot session   every program of it has ended                 EMPTY
+//   no such group          the kernel holds none                         EMPTY
+//   the number is another program's
+//                          a number is given again only once no program
+//                          holds it as its group, so the unit ended      EMPTY
+//   the group                                                            OCCUPIED
+// Where the boot session cannot be read nothing is established: `open'
+// refuses, and the property is not claimed.
 #include "unit_reference.h"
 namespace {
 struct unit_identity {
@@ -1479,9 +1493,23 @@ bool unit_parse(const char* p, kal_uintptr n, unit_identity& u) {
         && r.number(u.birth) && u.birth != 0
         && r.token(u.boot,sizeof u.boot) && r.at == n;
 }
-bool unit_same_origin(const unit_identity& u) {
+enum class origin { here, another_boot, unreadable };
+origin unit_origin_of(const unit_identity& u) {
     char boot[64]{}, space[64]{};
-    return unit_origin(boot,space) && unit_reference::same(u.boot,boot);
+    if (!unit_origin(boot,space)) return origin::unreadable;
+    return unit_reference::same(u.boot,boot) ? origin::here : origin::another_boot;
+}
+bool unit_same_origin(const unit_identity& u) { return unit_origin_of(u) == origin::here; }
+// Read once: the answer is a property of where the program runs.
+bool units_observable() {
+    static int known = -1;
+    int k = __atomic_load_n(&known, __ATOMIC_ACQUIRE);
+    if (k < 0) {
+        char boot[64]{}, space[64]{}; kal_u64 own = 0;
+        k = unit_origin(boot,space) && unit_birth(0,own) && own != 0 ? 1 : 0;
+        __atomic_store_n(&known, k, __ATOMIC_RELEASE);
+    }
+    return k == 1;
 }
 }
 extern "C" {
@@ -1501,18 +1529,20 @@ int kal_process_job_create(kal_job* out, char* reference, kal_uintptr capacity, 
 int kal_process_job_open(const char* reference, kal_uintptr length, kal_job* out) {
     if (!out) return kal_err_invalid;
     unit_identity u; if (!unit_parse(reference,length,u)) return kal_err_invalid;
-    if (!unit_same_origin(u)) return kal_err_not_supported;
+    if (unit_origin_of(u) == origin::unreadable) return kal_err_not_supported;
     out->h = static_cast<kal_uintptr>(u.group); return kal_ok;
 }
 int kal_process_job_observe(kal_job job, const char* reference, kal_uintptr length, kal_u32* state) {
     if (!state) return kal_err_invalid; *state = KAL_JOB_UNKNOWN;
     unit_identity u; if (!unit_parse(reference,length,u) || job.h != u.group) return kal_err_invalid;
-    if (!unit_same_origin(u)) return kal_ok;
+    const origin from = unit_origin_of(u);
+    if (from == origin::another_boot) { *state = KAL_JOB_EMPTY; return kal_ok; }
+    if (from != origin::here) return kal_ok;
     const auto status = okm::sys(okm::nr_kill,-static_cast<okm_long>(u.group),0);
     if (status == -3 /* ESRCH */) { *state = KAL_JOB_EMPTY; return kal_ok; }
     if (okm::failed(status)) return kal_ok;
     kal_u64 birth = 0;
-    if (unit_birth(static_cast<okm_long>(u.group),birth) && birth != u.birth) return kal_ok;
+    if (unit_birth(static_cast<okm_long>(u.group),birth) && birth != u.birth) { *state = KAL_JOB_EMPTY; return kal_ok; }
     *state = KAL_JOB_OCCUPIED; return kal_ok;
 }
 int kal_process_job_retire(kal_job job, const char* reference, kal_uintptr length,
