@@ -5,10 +5,10 @@ written on the kernel's own calls.
 
 ```toml
 [dependencies]
-openkal = "0.25.0"
+openkal = "0.26.0"
 
 [target.'cfg(os = "macos")'.dependencies]
-openkal-macos = "0.23.5"
+openkal-macos = "0.24.1"
 ```
 
 Its purpose is as much to test the specification as to be used. A specification
@@ -22,6 +22,21 @@ The process interface provides the OpenKal 0.24 declared-unit operations.
 References retain the original process identity, birth and boot session.
 Retirement checks the live continuation before and after membership migration;
 ambiguity reports `unknown`. No process registry is installed.
+
+**What an observation answers (0.24.0, openkal 0.26, clause 7.18).** This kernel
+has one process space, so a reference names its boot session and nothing else.
+A reference of another boot session is `empty`, where `kal_process_job_open`
+refused it; one whose number a program of another start now holds is `empty`,
+where it was `unknown`: a number is given again only once no program holds it as
+its group. `KAL_PROCESS_PROP_JOB_OBSERVE` is claimed only where the boot session
+and the caller's start can be read. `tests/a_unit_reference_names_its_boot_session.cpp`.
+
+**A start is bounded by the kernel alone (0.24.0, openkal 0.26, clause 7.6).** An
+argument vector or an environment of more than 512 entries was refused and
+reported as `kal_err_no_memory`; the constant guarded no buffer. It is removed:
+the kernel bounds the bytes of both together (`ARG_MAX`), and its refusal
+(`E2BIG`) is reported as `kal_err_no_space`, where it was `kal_err_io`.
+`tests/a_start_is_bounded_by_the_kernel_alone.cpp`.
 
 **The confinement rules are as long as the grants make them (0.22.1).** The
 sandbox profile names each grant in the write rule and in the read rule. Its
@@ -182,6 +197,22 @@ here it was a system call per answer until 0.17.1, and clangd.okb parsed 1.25 to
 same image parses as fast on Linux arm64. Since 0.17.1 it is the same kernel identifier, read from the record
 this system's library keeps for each thread (`pthread_threadid_np`, a name no C
 library in this ecosystem defines).
+
+## What 0.24.1 corrects
+
+**A request acted on by another context ends the program as the request.**
+`kal_process_end_as_requested` restores the request's default treatment, unblocks
+it and sends it to the program again; a program still there a moment later ends
+with the status a shell gives one so ended. The kernel gives a signal sent to the
+program to the first of its contexts that does not block it, which need not be
+the caller, and the moment was not waited for: called from a context other than
+the first, `kill` returned before the signal was delivered and the exit ended the
+program first, so its starter saw the status 143 where the request's own end was
+`SIGTERM` (measured: okrun 0.7.0, whose own context acts on the request, on the
+macos-15 arm64 runners). The call now waits up to a tenth of a second for the
+delivery, as openkal-linux does, before that exit.
+`tests/stop_word_and_sigpipe.cpp` runs twenty copies whose second context acts on
+the request while the first waits for it; each ends by `SIGTERM`.
 
 ## What 0.23.5 corrects
 

@@ -4,7 +4,9 @@
 //   1. (tests/stop_word_ignored.cpp: an ignored request stays ignored, K2);
 //   2. ending as requested is reported to the starter as the request (G4);
 //   3. writing to a stream whose far end is gone is an error the program is
-//      told, not SIGPIPE ending it (K8).
+//      told, not SIGPIPE ending it (K8);
+//   4. a request acted on by a context other than the program's first ends
+//      the program as the request, in each of twenty copies (0.24.1).
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +18,7 @@ import openkal.types;
 import openkal.env;
 import openkal.stream;
 import openkal.process;
+import openkal.task;
 import mcpplibs.mtest;
 
 using namespace mcpplibs::mtest;
@@ -63,6 +66,27 @@ child end_as_requested{"end-as-requested", [](std::vector<std::string>) {
     return 92;
 }};
 
+// The request acted on by a context other than the program's first, which
+// waits for it, as a runner's first context waits for the image it runs while
+// a context of its own takes the requests (0.24.1).
+static void acts_on_the_request(void* argument) {
+    const kal_u32* word = static_cast<const kal_u32*>(argument);
+    ::kill(::getpid(), SIGTERM);
+    for (int i = 0; i < 1000 && *word == 0; ++i) ::usleep(1000);
+    if (*word == 0) ::_exit(91);
+    kal_process_end_as_requested();
+    ::_exit(92);
+}
+
+child end_from_another_context{"end-as-requested-from-another-context", [](std::vector<std::string>) {
+    const kal_u32* word = kal_process_stop_requested();
+    if (word == nullptr) return 90;
+    kal_task other{};
+    if (kal_task_start(&acts_on_the_request, const_cast<kal_u32*>(word), &other) != kal_ok) return 94;
+    kal_task_join(other);
+    return 95;
+}};
+
 UTest stop_word_and_sigpipe_test{"stop_word_and_sigpipe", [] {
 
     {
@@ -86,6 +110,15 @@ UTest stop_word_and_sigpipe_test{"stop_word_and_sigpipe", [] {
     st = run_copy(self, "hang-up");
     check(WIFSIGNALED(st) && WTERMSIG(st) == SIGHUP,
           "a hang-up is taken over as a request, and the program ends as it would have (0.15.1)");
+    // The kernel gives the request to the first context, not to the one that
+    // acts on it: each of twenty copies ends as the request (0.24.1).
+    int ended = 0;
+    for (int copy = 0; copy < 20; ++copy) {
+        st = run_copy(self, "end-as-requested-from-another-context");
+        if (WIFSIGNALED(st) && WTERMSIG(st) == SIGTERM) ++ended;
+    }
+    expect(ended == 20) << "a request acted on by a context other than the first ends the program as the "
+                           "request, in " << ended << " of 20 copies";
 #else
     (void)word;
 #endif
